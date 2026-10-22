@@ -168,6 +168,18 @@ def test_event_revision_prevents_duplicate_mutations(app):
     assert "Count: 1" in page.text
 
 
+def test_testing_client_accepts_stale_revision_responses(app):
+    page = TestClient(app).open("/")
+    original_revision = page.manifest["rev"]
+    page.click("Increment")
+    page.manifest["rev"] = original_revision
+
+    replay = page.fire("c1.1", {})
+
+    assert replay["error"]["code"] == "stale_revision"
+    assert "Count: 1" in page.text
+
+
 @pytest.mark.asyncio
 async def test_session_state_mutations_are_serialized_across_page_views():
     app = App()

@@ -174,7 +174,16 @@ class PageView:
             self.manifest["csrf"] = data["csrf"]
         for patch in data.get("patches", []):
             self._apply(patch)
-        if check and "error" in data and data["error"]["code"] not in ("validation_error", "stale"):
+        if (
+            check
+            and "error" in data
+            and data["error"]["code"]
+            not in (
+                "validation_error",
+                "stale",
+                "stale_revision",
+            )
+        ):
             raise EventFailedError(f"{response.status_code}: {data['error']}")
         return data
 
