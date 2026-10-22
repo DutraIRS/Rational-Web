@@ -23,7 +23,7 @@ from .component import Page
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
-from .http import SESSION_COOKIE, THEME_COOKIE, base_path
+from .http import SESSION_COOKIE, THEME_COOKIE, SecurityHeadersMiddleware, base_path
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, error_page
 from .protocol import EVENT_PATH, handle_event
@@ -131,6 +131,7 @@ class App:
             openapi_url=f"{self.api_prefix}/openapi.json" if api_docs else None,
         )
         self.fastapi.add_middleware(TelemetryMiddleware, telemetry=self.logging)
+        self.fastapi.add_middleware(SecurityHeadersMiddleware)
         routes: list[tuple[str, Callable[..., Any], str]] = [
             *([(f"{self.api_prefix}/docs", self._api_docs, "GET")] if api_docs else []),
             ("/_rational/runtime.js", self._asset(self.runtime_js, "text/javascript"), "GET"),

@@ -318,6 +318,16 @@ def test_assets_are_served_with_long_cache(app):
     assert runtime.status_code == theme.status_code == 200
     assert "immutable" in runtime.headers["cache-control"]
     assert "--rw-color-primary" in theme.text
+    assert runtime.headers["x-content-type-options"] == "nosniff"
+    assert theme.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+
+
+def test_api_responses_have_baseline_security_headers(app):
+    response = TestClient(app).http.get("/api/openapi.json")
+
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
 
 
 def test_manifest_cannot_break_out_of_script():
