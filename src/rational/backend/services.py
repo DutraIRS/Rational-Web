@@ -135,23 +135,30 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
         ctx = await app.context_for(request)
         session = ctx.peek_session()
         if spec.method != "GET" and session is not None and not csrf_ok(request, session):
-            return json_error(403, "csrf", "Invalid CSRF token")
+            response = json_error(403, "csrf", "Invalid CSRF token")
+            app.finish(request, response, ctx)
+            return response
         if body_model is not None:
             body = kwargs.pop("body")
             kwargs = {field: getattr(body, field) for field in body_model.model_fields}
-        try:
-            if spec.auth == "required" and ctx.user is None:
-                raise Unauthorized()
-            result = getattr(cls(ctx), name)(**kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-        except RationalError as e:
-            return json_error(e.status, e.code, e.message, details=e.details)
-        except Exception:
-            log.exception("error in remote %s.%s", cls.__name__, name)
-            return json_error(500, "internal", "Something went wrong")
-        app.finish(request, response, ctx)
-        return result
+        async with app.session_lock(ctx):
+            try:
+                if spec.auth == "required" and ctx.user is None:
+                    raise Unauthorized()
+                result = getattr(cls(ctx), name)(**kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+            except RationalError as e:
+                error_response = json_error(e.status, e.code, e.message, details=e.details)
+                app.finish(request, error_response, ctx)
+                return error_response
+            except Exception:
+                log.exception("error in remote %s.%s", cls.__name__, name)
+                error_response = json_error(500, "internal", "Something went wrong")
+                app.finish(request, error_response, ctx)
+                return error_response
+            app.finish(request, response, ctx)
+            return result
 
     endpoint.__signature__ = inspect.Signature([*context_params, *arg_params])  # type: ignore[attr-defined]
     endpoint.__name__ = f"{cls.__name__}_{name}"

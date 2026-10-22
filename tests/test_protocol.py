@@ -1,8 +1,11 @@
 """Security and robustness of the HTTP event protocol and page routing."""
 
+import asyncio
+
+import httpx
 import pytest
 
-from rational import App, Button, Column, Component, NotFound, Page, State, Text, redirect
+from rational import App, Button, Column, Component, FieldError, NotFound, Page, State, Text, redirect
 from rational.testing import TestClient
 
 
@@ -54,11 +57,23 @@ def app():
 
 
 def post_event(client, view, handler="c1.1", **overrides):
-    body = {"v": 1, "page": view.manifest["page"], "rev": 0, "handler": handler, "payload": {}}
+    body = {
+        "v": 1,
+        "page": view.manifest["page"],
+        "rev": view.manifest["rev"],
+        "handler": handler,
+        "payload": {},
+    }
     headers = {"X-RW-CSRF": view.manifest["csrf"]}
     headers.update(overrides.pop("headers", {}))
     body.update(overrides)
-    return client.http.post("/_rational/event", json=body, headers=headers)
+    response = client.http.post("/_rational/event", json=body, headers=headers)
+    data = response.json()
+    if "rev" in data:
+        view.manifest["rev"] = data["rev"]
+    if "csrf" in data:
+        view.manifest["csrf"] = data["csrf"]
+    return response
 
 
 def test_event_requires_csrf_token(app):
@@ -78,11 +93,126 @@ def test_event_requires_the_owning_session(app):
     assert "Count: 0" in owner.open("/").text
 
 
+@pytest.mark.parametrize("failure", ["rational", "unexpected"])
+def test_remote_errors_finalize_session_rotation(failure):
+    from rational.backend import Service, remote
+
+    app = App()
+
+    @app.service
+    class AccountService(Service):
+        @remote()
+        def login_then_fail(self, failure: str) -> None:
+            self.context.session.login("alice")
+            if failure == "rational":
+                raise FieldError("email", "Already registered")
+            raise RuntimeError("operation failed")
+
+    client = TestClient(app)
+    session = app.sessions.create()
+    old_id = session.id
+
+    response = client.http.post(
+        "/api/account/login-then-fail",
+        json={"failure": failure},
+        headers={"X-RW-CSRF": session.csrf, "Cookie": f"rw_sid={old_id}"},
+    )
+
+    assert response.status_code == (422 if failure == "rational" else 500)
+    new_id = response.headers["set-cookie"].split(";", 1)[0].split("=", 1)[1]
+    assert new_id and new_id != old_id
+    assert app.sessions.get(old_id) is None
+    assert app.sessions.get(new_id).user == "alice"
+
+
+def test_failed_page_render_finalizes_rotated_session():
+    app = App()
+
+    @app.page("/")
+    class Broken(Page):
+        def render(self):
+            self.context.session.login("alice")
+            raise RuntimeError("render failed")
+
+    client = TestClient(app)
+    client.http.__init__(client.app, raise_server_exceptions=False)
+
+    response = client.http.get("/")
+
+    assert response.status_code == 500
+    new_id = response.headers["set-cookie"].split(";", 1)[0].split("=", 1)[1]
+    session = app.sessions.get(new_id)
+    assert session is not None and session.user == "alice"
+
+
 def test_unknown_page_session_is_gone(app):
     client = TestClient(app)
     page = client.open("/")
     response = post_event(client, page, page="nope")
     assert response.status_code == 410
+
+
+def test_event_revision_prevents_duplicate_mutations(app):
+    client = TestClient(app)
+    page = client.open("/")
+    original_revision = page.manifest["rev"]
+    page.click("Increment")
+    request = {"v": 1, "page": page.manifest["page"], "rev": original_revision, "handler": "c1.1", "payload": {}}
+    headers = {"X-RW-CSRF": page.manifest["csrf"]}
+
+    replay = client.http.post("/_rational/event", json=request, headers=headers)
+
+    assert replay.status_code == 409
+    assert replay.json()["error"]["code"] == "stale_revision"
+    assert replay.json()["actions"] == [{"op": "reload"}]
+    assert "Count: 1" in page.text
+
+
+@pytest.mark.asyncio
+async def test_session_state_mutations_are_serialized_across_page_views():
+    app = App()
+
+    class SharedCounter(Component):
+        count = State(0, scope="session")
+
+        async def increment(self):
+            current = self.count
+            await asyncio.sleep(0.02)
+            self.count = current + 1
+
+        def render(self):
+            return Button(f"Count: {self.count}", on_click=self.increment)
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return SharedCounter()
+
+    client = TestClient(app)
+    first_page = client.open("/")
+    second_page = client.open("/")
+
+    cookie_header = "; ".join(f"{name}={value}" for name, value in client.http.cookies.items())
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        responses = await asyncio.gather(
+            *(
+                http.post(
+                    page.manifest["endpoint"],
+                    json={
+                        "v": page.manifest["v"],
+                        "page": page.manifest["page"],
+                        "rev": page.manifest["rev"],
+                        "handler": page.find("Count:", "click").get("data-rw-on-click"),
+                        "payload": {},
+                    },
+                    headers={"X-RW-CSRF": page.manifest["csrf"], "Cookie": cookie_header},
+                )
+                for page in (first_page, second_page)
+            )
+        )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert "Count: 2" in client.open("/").text
 
 
 def test_protocol_version_mismatch(app):

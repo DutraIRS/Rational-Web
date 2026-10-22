@@ -6,6 +6,7 @@ everything in process memory: run one worker, or use sticky sessions.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from collections import OrderedDict
@@ -27,6 +28,7 @@ class Session(MutableMapping[str, Any]):
         self.csrf = secrets.token_urlsafe(24)
         self.data: dict[str, Any] = {}
         self.state: dict[str, Any] = {}
+        self.lock = asyncio.Lock()
         self.revision = 0
         self.rotated = False
 

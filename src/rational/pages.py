@@ -16,6 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from . import dev
 from .component import Page
+from .context import Context
 from .document import render_document
 from .errors import RationalError, Redirect
 from .http import base_path, security_headers
@@ -59,16 +60,26 @@ class PageRoute:
     async def __call__(self, request: Request) -> Response:
         app = self.app
         app.housekeeping()
-        base = base_path(request)
         ctx = await app.context_for(request)
+        async with app.session_lock(ctx):
+            return await self._serve(request, ctx)
+
+    async def _serve(self, request: Request, ctx: Context) -> Response:
+        app = self.app
+        base = base_path(request)
+
+        def finish(response: Response) -> Response:
+            app.finish(request, response, ctx)
+            return response
+
         try:
             props = {name: a.validate_python(request.path_params[name]) for name, a in self.adapters.items()}
         except ValidationError:
-            return error_page(app, request, 404, "Page not found")
+            return finish(error_page(app, request, 404, "Page not found"))
         if self.auth == "required" and ctx.user is None:
             if app.login_path:
-                return RedirectResponse(f"{base}{app.login_path}?next={request.url.path}", status_code=303)
-            return error_page(app, request, 401, "Please sign in to view this page")
+                return finish(RedirectResponse(f"{base}{app.login_path}?next={request.url.path}", status_code=303))
+            return finish(error_page(app, request, 401, "Please sign in to view this page"))
 
         page = self.page(**props)
         runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
@@ -102,13 +113,12 @@ class PageRoute:
         except Redirect as r:
             url = base + r.url if r.url.startswith("/") and not r.url.startswith("//") else r.url
             response: Response = RedirectResponse(url, status_code=r.status)
-            app.finish(request, response, ctx)
-            return response
+            return finish(response)
         except RationalError as e:
-            return error_page(app, request, e.status, e.message)
+            return finish(error_page(app, request, e.status, e.message))
         except Exception as e:
             if app.debug:
-                return dev.error_page(request, e)
+                return finish(dev.error_page(request, e))
             raise
 
         manifest = None
@@ -144,8 +154,7 @@ class PageRoute:
         )
         response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
         security_headers(response, nonce)
-        app.finish(request, response, ctx)
-        return response
+        return finish(response)
 
 
 def error_page(app: App, request: Request, status: int, message: str) -> HTMLResponse:

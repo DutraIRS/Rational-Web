@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import logging
 import secrets
 import traceback
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -141,6 +142,7 @@ class App:
         for path, endpoint, method in routes:
             self.fastapi.add_api_route(path, endpoint, methods=[method], include_in_schema=False)
         self.fastapi.add_exception_handler(StarletteHTTPException, self._http_error)  # type: ignore[arg-type]
+        self.fastapi.add_exception_handler(Exception, self._server_error)
 
     # -- registration ------------------------------------------------------------------
 
@@ -222,6 +224,7 @@ class App:
         if session is None:
             session = self.sessions.get(request.cookies.get(SESSION_COOKIE))
         ctx = Context(self, request, session)
+        request.state.rational_context = ctx
         if self.authenticator is not None:
             user = self.authenticator(ctx)
             if inspect.isawaitable(user):
@@ -253,6 +256,16 @@ class App:
                 secure=secure,
                 path="/",
             )
+
+    @asynccontextmanager
+    async def session_lock(self, ctx: Context) -> AsyncIterator[None]:
+        """Serialize requests that mutate a session shared by multiple pages."""
+        session = ctx.peek_session()
+        if session is None:
+            yield
+            return
+        async with session.lock:
+            yield
 
     def data_theme(self, request: Request) -> str | None:
         chosen = request.cookies.get(THEME_COOKIE)
@@ -303,6 +316,14 @@ class App:
             message = "Page not found" if exc.status_code == 404 else str(exc.detail)
             return error_page(self, request, exc.status_code, message)
         return await http_exception_handler(request, exc)
+
+    async def _server_error(self, request: Request, exc: Exception) -> Response:
+        logging.getLogger("rational").exception("unhandled request error", exc_info=(type(exc), exc, exc.__traceback__))
+        response = PlainTextResponse("Internal Server Error", status_code=500)
+        ctx = getattr(request.state, "rational_context", None)
+        if isinstance(ctx, Context):
+            self.finish(request, response, ctx)
+        return response
 
     @staticmethod
     def _asset(content: str, media_type: str) -> Callable[[], Any]:

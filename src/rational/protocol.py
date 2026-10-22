@@ -62,8 +62,24 @@ async def handle_event(app: App, request: Request) -> Response:
     if not runtime.allow_event(app.event_burst, app.event_rate):
         return _error(429, "rate_limited", "Too many events")
 
-    async with runtime.lock:
-        ctx = await app.context_for(request, session)
+    ctx = await app.context_for(request, session)
+    async with app.session_lock(ctx), runtime.lock:
+        if event.rev != runtime.revision:
+            return JSONResponse(
+                {
+                    "v": PROTOCOL_VERSION,
+                    "rev": runtime.revision,
+                    "patches": [],
+                    "css": [],
+                    "actions": [{"op": "reload"}],
+                    "error": {
+                        "code": "stale_revision",
+                        "message": "This page changed in another request; reload it before continuing",
+                    },
+                },
+                status_code=409,
+                headers={"Cache-Control": "no-store"},
+            )
         runtime.context = ctx
         runtime.refresh_session_state()
         error: dict[str, Any] | None = None
