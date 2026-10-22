@@ -1,0 +1,8 @@
+"""Every page of the app, combined into one router for ``app.py``."""
+
+from rational import Router
+
+from . import media
+
+router = Router()
+router.include(media.router)
