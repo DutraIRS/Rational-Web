@@ -58,9 +58,10 @@ there**:
   morphs updated HTML into place, preserving focus and typing.
 - **Explicit boundaries.** Event handlers always run on the server. Only methods marked
   `@remote` become an HTTP API. Nothing is callable from the browser by accident.
-- **Typed everything.** Props, path parameters, event payloads and API bodies are validated
-  from your annotations by Pydantic. Invalid input never reaches your code and shows up next to
-  the right form field.
+- **Typed boundaries.** Path parameters, event payloads and API bodies are validated from your
+  annotations by Pydantic. Invalid form input never reaches your handler and shows up next to
+  the right field. Component prop annotations support static typing; runtime checks cover required
+  and unexpected prop names.
 - **Styles as values.** Immutable `Style` objects compile to deduplicated, hashed CSS classes,
   with theme tokens, pseudo-states, `@media` breakpoints and `@container` queries. You get no
   specificity wars, no class-name soup and no CSS injection.
@@ -197,7 +198,8 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [ ] Client-side navigation between pages, with no full reload
 - [ ] Finer-grained server diffs (text and attribute patches)
 - [ ] More components: `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, with full keyboard support
-- [ ] Pluggable page-session store (Redis) so multi-worker deploys don't need sticky sessions
+- [ ] Pluggable session store (for example Redis); page runtimes remain worker-local, so
+      multi-worker deployments still need sticky routing
 
 **0.3: productivity**
 - [ ] `rational new` project scaffolding and an Alembic migration workflow

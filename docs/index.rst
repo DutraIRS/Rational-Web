@@ -37,8 +37,9 @@ one consistent, typed, inspectable API. It is built on FastAPI, Pydantic and SQL
   JavaScript at all; interactive pages load a ~4 KiB runtime.
 * **Explicit boundaries.** Event handlers run on the server; only ``@remote`` methods form an
   HTTP API, documented in Swagger UI. Nothing is callable from the browser by accident.
-* **Typed everything.** Props, path parameters, event payloads and API bodies are validated from
-  your annotations.
+* **Typed boundaries.** Path parameters, event payloads and API bodies are validated from your
+  annotations. Component prop annotations support static typing; runtime checks cover required
+  and unexpected prop names.
 * **Styles as values.** ``Style`` objects compile to hashed, deduplicated CSS with themes,
   breakpoints and container queries.
 * **Secure by default.** Escaping, CSRF, session-bound events, validated payloads.

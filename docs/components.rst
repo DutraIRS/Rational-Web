@@ -20,7 +20,7 @@ component registered at a URL. ``render()`` returns primitives (``Text``, ``Butt
    Greeting(name="Ada", excited=True)
 
 * Annotated class attributes are **props**: constructor keywords, checked for missing or
-  unknown names.
+  unknown names. Their values are not validated at runtime; annotations support static typing.
 * Positional arguments become ``self.children``.
 * ``key=`` gives a stable identity among siblings; ``style=`` merges into the root element.
 
