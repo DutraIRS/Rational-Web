@@ -153,7 +153,28 @@ class App:
             if not (isinstance(cls, type) and issubclass(cls, Page)):
                 raise TypeError("@app.page decorates Page subclasses")
             route = PageRoute(self, path, cls, title, auth)
-            self.fastapi.add_api_route(path, route, methods=["GET"], include_in_schema=False, name=cls.__name__)
+
+            async def endpoint(request: Request) -> Response:
+                return await route(request)
+
+            endpoint.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+                [
+                    inspect.Parameter(
+                        "request",
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        annotation=Request,
+                    )
+                ],
+                return_annotation=Response,
+            )
+            self.fastapi.add_api_route(
+                path,
+                endpoint,
+                methods=["GET"],
+                response_model=None,
+                include_in_schema=False,
+                name=cls.__name__,
+            )
             self.routes[cls] = route
             return cls
 

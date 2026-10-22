@@ -39,7 +39,7 @@ rational = "rational.cli:main"
 
 [project.optional-dependencies]
 db = ["sqlalchemy[asyncio]>=2.0", "aiosqlite>=0.19"]
-testing = ["httpx>=0.27", "httpx2>=2"]  # Starlette >=1.x prefers httpx2; older versions use httpx
+testing = ["httpx>=0.27,<0.28", "httpx2>=2"]  # Starlette <1 uses httpx; >=1 prefers httpx2
 dev = [
     "rational[db,testing]",
     "pytest>=8",
