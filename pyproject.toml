@@ -34,6 +34,13 @@ dependencies = [
     "uvicorn>=0.27",
 ]
 
+[project.urls]
+Homepage = "https://github.com/DutraIRS/Rational-Web"
+Repository = "https://github.com/DutraIRS/Rational-Web"
+Issues = "https://github.com/DutraIRS/Rational-Web/issues"
+Changelog = "https://github.com/DutraIRS/Rational-Web/blob/main/CHANGELOG.md"
+Funding = "https://ko-fi.com/dutrairs"
+
 [project.scripts]
 rational = "rational.cli:main"
 

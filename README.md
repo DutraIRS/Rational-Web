@@ -221,7 +221,8 @@ Have an idea? Open an issue. The roadmap is a conversation.
 ## Contributing
 
 ```console
-# From a local checkout:
+git clone https://github.com/DutraIRS/Rational-Web.git
+cd Rational-Web
 python -m venv .venv
 . .venv/bin/activate                                  # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs,browser]"
