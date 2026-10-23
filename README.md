@@ -41,6 +41,7 @@ if __name__ == "__main__":
 $ pip install rational
 $ python app.py --dev     # hot reload, live browser reload, readable errors
 $ python app.py --prod    # production: pages at /, JSON API at /api, one origin
+$ python app.py --export site/   # static pages as plain HTML, for any static host
 ```
 
 > **Status: alpha (0.1).** The architecture is implemented and tested end to end, including in
@@ -81,7 +82,7 @@ there**:
 | Backend | `Service` + `@remote` → typed JSON API under `/api`, interactive **Swagger UI** at `/api/docs`; async SQLAlchemy |
 | Projects | `Router` (pages and services in their own modules, with prefixes) and a composition root in `app.py` |
 | Developer experience | `--dev` hot reload on every OS, live browser reload, error pages that point at *your* line with hints |
-| Deployment | `--prod`, `python -m rational`, any ASGI server, mountable under a sub-path, proxy-aware |
+| Deployment | `--prod`, `python -m rational`, any ASGI server, mountable under a sub-path, proxy-aware, static export with `--export` |
 | Testing | `rational.testing.TestClient` drives pages by accessible name: `page.click("Save")` |
 
 ## Examples
