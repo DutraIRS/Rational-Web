@@ -9,7 +9,10 @@
   const PROTOCOL = 1;
   const INPUT_DEBOUNCE_MS = 150;
   let rev = M.rev;
+  let lastSeq = M.seq || 0;
   let busy = false;
+  let source = null;
+  const held = [];  // pushed batches that arrived while an event was in flight
   const queue = [];
   const timers = new Map();
 
@@ -104,10 +107,16 @@
       });
       if (res.status === 410) { location.reload(); return; }
       const data = await res.json().catch(() => ({ error: { code: "bad_response", message: "Unexpected response" } }));
+      // Pushed batches rendered before this response go first, so older HTML never overwrites newer.
+      const seq = typeof data.seq === "number" ? data.seq : Infinity;
+      held.sort((a, b) => a.seq - b.seq);
+      while (held.length && held[0].seq < seq) apply(held.shift());
       apply(data);
+      while (held.length) apply(held.shift());
       if (data.error) showError(data.error, el);
       else if (el && item.name === "submit") clearErrors(el);
     } catch (err) {
+      while (held.length) apply(held.shift());
       emit(document, "rw:offline", { error: String(err) });
       if (M.debug) console.error("[rational]", err);
     } finally {
@@ -117,7 +126,24 @@
     }
   }
 
+  // ---- server push -------------------------------------------------------------------------
+  function openStream() {
+    if (source || !M.stream || typeof EventSource === "undefined") return;
+    source = new EventSource(`${M.stream}?page=${encodeURIComponent(M.page)}`);
+    source.onmessage = (m) => {
+      let data;
+      try { data = JSON.parse(m.data); } catch { return; }
+      // After a reconnect, a seq ahead of ours means batches were missed: resync with a reload.
+      if (typeof data.hello === "number") { if (data.hello > lastSeq) location.reload(); return; }
+      if (busy) held.push(data); else apply(data);
+    };
+    source.onerror = () => {
+      if (source && source.readyState === EventSource.CLOSED) { source.close(); source = null; }
+    };
+  }
+
   function apply(data) {
+    if (typeof data.seq === "number" && data.seq > lastSeq) lastSeq = data.seq;
     if (typeof data.rev === "number") rev = data.rev;
     if (data.csrf) M.csrf = data.csrf;
     if (data.css && data.css.length) insertCss(data.css);
@@ -133,6 +159,7 @@
     for (const a of data.actions || []) {
       if (a.op === "navigate" && isSameOrigin(a.url)) location.assign(a.url.startsWith("/") ? (M.base || "") + a.url : a.url);
       else if (a.op === "reload") location.reload();
+      else if (a.op === "stream") { M.stream = M.stream || M.endpoint.replace(/event$/, "stream"); openStream(); }
       else if (a.op === "js") runOps(a.ops, document.body);
     }
     emit(document, "rw:updated", { rev });
@@ -293,6 +320,7 @@
   }
 
   // ---- public hook for custom scripts ------------------------------------------------------
+  openStream();
   window.rational = {
     version: PROTOCOL,
     /** Call a @remote method: rational.call("todo", "add", {title: "x"}) -> POST /api/todo/add */

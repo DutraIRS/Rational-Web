@@ -8,14 +8,16 @@ each event rerenders dirty components into morph patches.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import itertools
 import json
+import logging
 import math
 import secrets
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +36,11 @@ if TYPE_CHECKING:
     from .context import Context
 
 MAX_FLUSH_PASSES = 8
+PUSH_COALESCE_SECONDS = 0.03
+MAX_STREAMS_PER_PAGE = 4
+SUBSCRIBER_QUEUE_SIZE = 256
+
+log = logging.getLogger("rational")
 
 
 class StaleHandlerError(RationalError):
@@ -70,6 +77,15 @@ class PageRuntime:
         self.token_stamp = time.monotonic()
         self._cids = itertools.count()
         self._visited: set[str] = set()
+        # Server push: background tasks mutate state, and the pusher streams the resulting patches.
+        self.seq = 0  # bumped for every batch of patches sent, over HTTP or the stream
+        self.served = False  # the page HTML has been delivered to the browser
+        self.closed = False
+        self.wants_stream = False
+        self.tasks: dict[asyncio.Task[None], str] = {}
+        self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
+        self._push_scheduled = False
+        self._pushers: set[asyncio.Task[None]] = set()
 
     # -- rendering -------------------------------------------------------------------
 
@@ -204,6 +220,100 @@ class PageRuntime:
         if current_frame.get() is not None:
             raise RuntimeError("state must not be assigned during render(); do it in an event handler or mount()")
         self.dirty.update(self.deps.get(cell, ()))
+        if self.tasks:
+            self.schedule_push()
+
+    # -- background tasks and server push ------------------------------------------------------
+
+    def spawn(
+        self,
+        comp: Component,
+        fn: Callable[..., Coroutine[Any, Any, Any]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> asyncio.Task[None]:
+        if not inspect.iscoroutinefunction(fn):
+            raise TypeError("run_task() needs an async function")
+        if self.closed:
+            raise RuntimeError("the page is gone")
+        assert comp.cid is not None
+        self.interactive = True
+        self.wants_stream = True
+        if self.served:
+            self.add_action({"op": "stream"})
+        ctx = contextvars.copy_context()
+        ctx.run(current_frame.set, None)
+        task = asyncio.get_running_loop().create_task(self._run_task(fn, args, kwargs), context=ctx)
+        self.tasks[task] = comp.cid
+        task.add_done_callback(self.tasks.pop)
+        return task
+
+    async def _run_task(
+        self, fn: Callable[..., Coroutine[Any, Any, Any]], args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> None:
+        try:
+            await fn(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("error in background task %s", getattr(fn, "__qualname__", fn))
+
+    def schedule_push(self) -> None:
+        if self._push_scheduled or self.closed:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # a state change from a plain thread: the next event will deliver it
+            return
+        self._push_scheduled = True
+        pusher = loop.create_task(self._push())
+        self._pushers.add(pusher)
+        pusher.add_done_callback(self._pushers.discard)
+
+    async def _push(self) -> None:
+        await asyncio.sleep(PUSH_COALESCE_SECONDS)  # coalesce bursts of changes into one batch
+        self._push_scheduled = False
+        if not self.subscribers or self.closed:
+            return  # changes stay dirty and go out when a stream connects
+        try:
+            async with self.lock:
+                if not self.dirty and not self.actions:
+                    return
+                patches = await self.flush()
+                self.seq += 1
+                self.publish(
+                    {
+                        "v": 1,
+                        "seq": self.seq,
+                        "patches": patches,
+                        "css": self.sheet.drain(),
+                        "actions": self.take_actions(),
+                    }
+                )
+        except Exception:
+            log.exception("error while pushing page updates")
+
+    def publish(self, batch: dict[str, Any] | None) -> None:
+        for queue in list(self.subscribers):
+            try:
+                queue.put_nowait(batch)
+            except asyncio.QueueFull:
+                # A client that cannot keep up must resync from scratch.
+                self.subscribers.discard(queue)
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait(None)
+
+    def subscribe(self) -> asyncio.Queue[dict[str, Any] | None] | None:
+        if self.closed or len(self.subscribers) >= MAX_STREAMS_PER_PAGE:
+            return None
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(SUBSCRIBER_QUEUE_SIZE)
+        self.subscribers.add(queue)
+        self.schedule_push()  # deliver anything that changed before the stream connected
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any] | None]) -> None:
+        self.subscribers.discard(queue)
 
     def sync_session_revision(self) -> None:
         session = self.context.peek_session()
@@ -258,6 +368,9 @@ class PageRuntime:
         if comp.path is not None and self.paths.get(comp.path) == cid:
             del self.paths[comp.path]
         self.dirty.discard(cid)
+        for task, owner in list(self.tasks.items()):
+            if owner == cid:
+                task.cancel()
         try:
             comp.unmount()
         finally:
@@ -311,8 +424,12 @@ class PageRuntime:
 
     def dispose(self) -> None:
         """Unmount everything (the page view expired or was evicted)."""
+        self.closed = True
         for cid in list(self.components):
             self._unmount_one(cid)
+        for task in list(self.tasks):
+            task.cancel()
+        self.publish(None)  # closes any open streams
 
     def allow_event(self, burst: int, per_second: float) -> bool:
         now = time.monotonic()

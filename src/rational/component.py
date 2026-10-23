@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import itertools
 import sys
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from .events import ClientOp
@@ -133,6 +134,14 @@ class Component:
     def run_js(self, *ops: ClientOp) -> None:
         """After this event's patches are applied, run declarative ``js.*`` operations."""
         self._require_runtime().add_action({"op": "js", "ops": [op.to_json() for op in ops]})
+
+    def run_task(self, fn: Callable[..., Coroutine[Any, Any, Any]], *args: Any, **kwargs: Any) -> asyncio.Task[None]:
+        """Run ``async def fn(*args, **kwargs)`` in the background for as long as this component is mounted.
+
+        State the task changes is pushed to the browser over a server-sent-events stream. The task is
+        cancelled when the component unmounts or the page expires. Exceptions are logged, not raised.
+        """
+        return self._require_runtime().spawn(self, fn, args, kwargs)
 
     def _require_runtime(self) -> PageRuntime:
         if self._rw_runtime is None:

@@ -6,13 +6,15 @@ Response: ``{v, rev, patches: [{op: "morph", id, html}], css: [rule], actions: [
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ValidationError
 
 from . import dev
@@ -27,6 +29,8 @@ log = logging.getLogger("rational")
 
 PROTOCOL_VERSION = 1
 EVENT_PATH = "/_rational/event"
+STREAM_PATH = "/_rational/stream"
+STREAM_KEEPALIVE_SECONDS = 15
 
 
 class EventRequest(BaseModel):
@@ -131,9 +135,11 @@ async def handle_event(app: App, request: Request) -> Response:
                 )
         patches = await runtime.flush()
         runtime.revision += 1
+        runtime.seq += 1
         payload: dict[str, Any] = {
             "v": PROTOCOL_VERSION,
             "rev": runtime.revision,
+            "seq": runtime.seq,
             "patches": patches,
             "css": runtime.sheet.drain(),
             "actions": runtime.take_actions(),
@@ -145,3 +151,41 @@ async def handle_event(app: App, request: Request) -> Response:
         response = JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
         app.finish(request, response, ctx)
         return response
+
+
+async def handle_stream(app: App, request: Request) -> Response:
+    """``GET /_rational/stream?page=ID``: server-sent events carrying patches pushed by background tasks."""
+    runtime = app.pages.get(request.query_params.get("page"))
+    if runtime is None:
+        return _error(410, "expired", "This page expired")
+    session = app.sessions.get(request.cookies.get(SESSION_COOKIE))
+    if session is None or session is not runtime.session:
+        return _error(403, "forbidden", "Session mismatch")
+    queue = runtime.subscribe()
+    if queue is None:
+        return _error(429, "too_many_streams", "Too many open streams for this page")
+
+    def frame(data: dict[str, Any]) -> str:
+        return f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+    async def events() -> AsyncIterator[str]:
+        try:
+            yield frame({"hello": runtime.seq})
+            while True:
+                try:
+                    batch = await asyncio.wait_for(queue.get(), STREAM_KEEPALIVE_SECONDS)
+                except TimeoutError:
+                    app.pages.get(runtime.id)  # an open stream keeps the page alive
+                    yield ": keepalive\n\n"
+                    continue
+                if batch is None:
+                    return
+                yield frame(batch)
+        finally:
+            runtime.unsubscribe(queue)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )

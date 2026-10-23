@@ -27,7 +27,7 @@ from .dev import error_page as dev_error_page
 from .http import SESSION_COOKIE, THEME_COOKIE, SecurityHeadersMiddleware, base_path
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, error_page
-from .protocol import EVENT_PATH, handle_event
+from .protocol import EVENT_PATH, STREAM_PATH, handle_event, handle_stream
 from .router import Router
 from .runtime import PageRuntime
 from .session import SessionBackend, SessionStore, TTLStore
@@ -146,6 +146,7 @@ class App:
             ("/_rational/runtime.js", self._asset(self.runtime_js, "text/javascript"), "GET"),
             ("/_rational/theme.css", self._asset(self.theme_css, "text/css"), "GET"),
             (EVENT_PATH, self._event, "POST"),
+            (STREAM_PATH, self._stream, "GET"),
             (DEV_SCRIPT_PATH, self._dev_script, "GET"),
             (BOOT_PATH, self._dev_boot, "GET"),
         ]
@@ -314,6 +315,9 @@ class App:
 
     async def _event(self, request: Request) -> Response:
         return await handle_event(self, request)
+
+    async def _stream(self, request: Request) -> Response:
+        return await handle_stream(self, request)
 
     async def _api_docs(self, request: Request) -> Response:
         session = (await self.context_for(request)).peek_session()
