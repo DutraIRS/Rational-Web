@@ -4,6 +4,14 @@ Working notes, not commitments. Each idea says what it builds on, what it costs,
 order. Current behaviour is described in `docs/running.rst`, `src/rational/protocol.py` and
 `src/rational/runtime.py`.
 
+## Status
+
+Implemented: handler timeouts and `@threaded`, background tasks, SSE push and optional WebSocket push,
+client navigation, live cross-tab sessions, API-only mode, fine-grained diffs, Suspense, persistent
+sessions. Still open: optimistic updates (C3), resumable page state (D5), ASGI adapters (D4),
+multi-worker pub/sub for push and live sessions (push is per process today). D2 (stateless sessions)
+is largely covered by `PersistentSessionStore`. The "Where we are" text below predates this work.
+
 ## Where we are
 
 - Every tab gets its own **page runtime** (component tree, handlers, dependency graph). It lives in
