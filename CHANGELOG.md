@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- More browser-local `js.*` operations: `show`, `hide`, `toggle`, `remove`, `set_text`, `set_value`,
+  `copy`, `scroll_to`, `open_dialog`, `close_dialog`. Browser tests now cover them in real Chromium.
 - Handler time limits: `App(handler_timeout=seconds)` and the `@timeout(seconds | None)` decorator.
   A handler or remote method that overruns answers `504` with code `timeout`.
 - Optional thread offload for synchronous handlers: `App(sync_handlers="thread")` and the

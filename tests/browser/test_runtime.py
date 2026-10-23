@@ -4,49 +4,12 @@ Skipped unless Playwright and Chromium are installed:
     pip install "rational[browser]" && playwright install chromium
 """
 
-import socket
-import threading
-import time
-
 import pytest
 
+from tests.browser._support import collect_errors, playwright, serve
 from tests.examples.conftest import load_example
 
-playwright = pytest.importorskip("playwright.sync_api")
-uvicorn = pytest.importorskip("uvicorn")
-
 pytestmark = pytest.mark.browser
-
-
-def serve(app):
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.time() + 10
-    while not server.started:
-        if time.time() > deadline:
-            raise RuntimeError("server did not start")
-        time.sleep(0.02)
-    return server, thread, f"http://127.0.0.1:{port}"
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with playwright.sync_playwright() as p:
-        browser = None
-        for channel in (None, "msedge", "chrome"):  # bundled Chromium, else an installed Chromium browser
-            try:
-                browser = p.chromium.launch(channel=channel) if channel else p.chromium.launch()
-                break
-            except Exception:
-                continue
-        if browser is None:
-            pytest.skip("no Chromium available: run `playwright install chromium`")
-        yield browser
-        browser.close()
 
 
 @pytest.fixture
@@ -55,13 +18,6 @@ def live(request):
     yield url
     server.should_exit = True
     thread.join(timeout=5)
-
-
-def collect_errors(page):
-    errors = []
-    page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-    return errors
 
 
 @pytest.mark.parametrize("live", [load_example("counter").app], indirect=True)

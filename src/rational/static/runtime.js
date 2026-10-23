@@ -315,6 +315,23 @@
         (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
       setTheme(current === "dark" ? "light" : "dark");
     },
+    show: (el, sel) => targets(el, sel).forEach((t) => { t.hidden = false; }),
+    hide: (el, sel) => targets(el, sel).forEach((t) => { t.hidden = true; }),
+    toggle: (el, sel) => targets(el, sel).forEach((t) => { t.hidden = !t.hidden; }),
+    remove: (el, sel) => targets(el, sel).forEach((t) => t.remove()),
+    set_text: (el, sel, text) => targets(el, sel).forEach((t) => { t.textContent = text; }),
+    set_value: (el, sel, value) => targets(el, sel).forEach((t) => {
+      t.value = value;
+      t.dispatchEvent(new Event("input", { bubbles: true }));  // let on_input handlers see the change
+    }),
+    copy: (el, sel, text) => {
+      const t = targets(el, sel)[0];
+      const value = text ?? (t ? (("value" in t && t.value) || t.textContent) : "");
+      if (navigator.clipboard) navigator.clipboard.writeText(value).catch(() => {});
+    },
+    scroll_to: (el, sel) => { const t = targets(el, sel)[0]; if (t) t.scrollIntoView({ block: "center" }); },
+    open_dialog: (el, sel) => { const t = targets(el, sel)[0]; if (t && typeof t.showModal === "function" && !t.open) t.showModal(); },
+    close_dialog: (el, sel) => { const t = targets(el, sel)[0]; if (t && typeof t.close === "function") t.close(); },
   };
 
   function runOps(ops, el) {

@@ -109,6 +109,15 @@ everything after it, including the server event, if the user declines::
 
    Button("Delete", on_click=[js.confirm("Delete this post?"), self.delete])
 
+The full set, each taking an optional ``target`` selector (default: the element itself;
+``closest:<selector>`` searches ancestors):
+
+* classes and attributes: ``toggle_class``, ``add_class``, ``remove_class``, ``set_attr``, ``toggle_attr``
+* visibility: ``show``, ``hide``, ``toggle`` (the ``hidden`` attribute) and ``remove``
+* content: ``set_text``, ``set_value`` (fires ``input``), ``copy`` (clipboard), ``scroll_to``
+* dialogs: ``open_dialog`` and ``close_dialog`` (a native ``<dialog>``, closing the nearest one by default)
+* ``focus``, ``confirm``, ``set_theme``, ``toggle_theme``
+
 They are not a Python-to-JavaScript compiler. A server re-render of the same element
 resets classes it changed, so use them for state the server doesn't own.
 

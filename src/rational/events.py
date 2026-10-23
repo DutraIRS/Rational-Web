@@ -71,3 +71,49 @@ class js:  # noqa: N801 - used as a namespace: js.toggle_class(...)
     @staticmethod
     def toggle_theme() -> ClientOp:
         return ClientOp("toggle_theme", (None,))
+
+    @staticmethod
+    def show(target: str | None = None) -> ClientOp:
+        """Un-hide the target (removes the ``hidden`` attribute)."""
+        return ClientOp("show", (target,))
+
+    @staticmethod
+    def hide(target: str | None = None) -> ClientOp:
+        return ClientOp("hide", (target,))
+
+    @staticmethod
+    def toggle(target: str | None = None) -> ClientOp:
+        """Show the target if hidden, hide it otherwise."""
+        return ClientOp("toggle", (target,))
+
+    @staticmethod
+    def remove(target: str | None = None) -> ClientOp:
+        """Take the element out of the page (until the server next re-renders it)."""
+        return ClientOp("remove", (target,))
+
+    @staticmethod
+    def set_text(text: str, target: str | None = None) -> ClientOp:
+        return ClientOp("set_text", (target, text))
+
+    @staticmethod
+    def set_value(value: str, target: str | None = None) -> ClientOp:
+        """Set a form control's value (``""`` clears it)."""
+        return ClientOp("set_value", (target, value))
+
+    @staticmethod
+    def copy(text: str | None = None, target: str | None = None) -> ClientOp:
+        """Copy ``text`` (or, if omitted, the target's text) to the clipboard."""
+        return ClientOp("copy", (target, text))
+
+    @staticmethod
+    def scroll_to(target: str) -> ClientOp:
+        return ClientOp("scroll_to", (target,))
+
+    @staticmethod
+    def open_dialog(target: str) -> ClientOp:
+        """Open a ``<dialog>`` as a modal."""
+        return ClientOp("open_dialog", (target,))
+
+    @staticmethod
+    def close_dialog(target: str | None = "closest:dialog") -> ClientOp:
+        return ClientOp("close_dialog", (target,))
