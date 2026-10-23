@@ -1,7 +1,8 @@
 """The browser <-> server event protocol (v1, HTTP POST).
 
 Request:  ``{v, page, rev, handler, payload}`` + ``X-RW-CSRF`` header + session cookie.
-Response: ``{v, rev, patches: [{op: "morph", id, html}], css: [rule], actions: [...], error?, csrf?}``.
+Response: ``{v, rev, patches, css: [rule], actions: [...], error?, csrf?}`` where a patch is
+``{op: "morph", id, html}`` or ``{op: "edit", id, edits}``.
 """
 
 from __future__ import annotations
@@ -103,6 +104,7 @@ async def handle_event(app: App, request: Request) -> Response:
             except StaleHandlerError as e:
                 # Unknown handler: the browser is out of sync. Resend the whole page instead of failing.
                 runtime.dirty.add(runtime.page.cid or "")
+                runtime.resync = True
                 error = e.to_json()
             except Redirect as r:
                 runtime.add_action({"op": "navigate", "url": r.url})

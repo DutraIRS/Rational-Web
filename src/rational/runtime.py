@@ -26,6 +26,7 @@ from ._tracking import Cell, Frame, current_frame
 from .binding import bind_payload, check_signature
 from .component import Component, Page
 from .concurrency import invoke
+from .diff import diff
 from .errors import RationalError
 from .rendering.builder import normalize_children
 from .rendering.html import to_html
@@ -63,6 +64,8 @@ class PageRuntime:
         self.paths: dict[str, str] = {}
         self.parent: dict[str, str | None] = {}
         self.children: dict[str, set[str]] = {}
+        self.rendered: dict[str, Node] = {}  # last resolved tree per component, for fine-grained diffs
+        self.resync = False  # the browser is out of sync: the next flush sends full morphs
         self.handlers: dict[str, tuple[Component, Callable[..., Any], str]] = {}
         self.component_handlers: dict[str, list[str]] = {}
         self.deps: dict[Cell, set[str]] = {}
@@ -92,8 +95,29 @@ class PageRuntime:
 
     async def render_page(self) -> Node:
         node = await self._render_component(self.page, "page", None)
+        self._remember(node)
         self.sync_session_revision()
         return node
+
+    def _assemble(self, node: Node, root: bool = True) -> Node:
+        """``node`` with nested components replaced by their latest trees (they re-render on their own)."""
+        cid = next((v for n, v in node.attrs if n == "data-rw-c"), None)
+        if not root and isinstance(cid, str) and cid in self.rendered:
+            node = self.rendered[cid]
+        if not any(isinstance(c, Node) for c in node.children):
+            return node
+        kids = tuple(self._assemble(c, False) if isinstance(c, Node) else c for c in node.children)
+        return replace(node, children=kids)
+
+    def _remember(self, node: Node) -> None:
+        """Record every component subtree in ``node`` so nested trees never go stale."""
+        stack: list[Node] = [node]
+        while stack:
+            current = stack.pop()
+            for name, value in current.attrs:
+                if name == "data-rw-c" and isinstance(value, str):
+                    self.rendered[value] = current
+            stack.extend(c for c in current.children if isinstance(c, Node))
 
     async def rerender(self, component: Component) -> Node:
         assert component.cid is not None and component.path is not None
@@ -102,6 +126,7 @@ class PageRuntime:
         node = await self._render_component(component, component.path, self.parent[component.cid])
         for cid in before - self._visited:
             self._unmount(cid)
+        self._remember(node)
         return node
 
     async def _render_component(self, comp: Component, path: str, parent: str | None) -> Node:
@@ -389,6 +414,7 @@ class PageRuntime:
         if comp is None:
             return
         self._forget_render(cid)
+        self.rendered.pop(cid, None)
         self.children.pop(cid, None)
         parent = self.parent.pop(cid, None)
         if parent is not None and parent in self.children:
@@ -430,9 +456,17 @@ class PageRuntime:
                 comp = self.components.get(cid)
                 if comp is None:
                     continue
+                stored = self.rendered.get(cid)
+                old = self._assemble(stored) if stored is not None else None
                 node = await self.rerender(comp)
-                patches.append({"op": "morph", "id": cid, "html": to_html(node)})
+                fine = self.context.app is not None and self.context.app.fine_patches and not self.resync
+                edits = diff(old, node) if old is not None and fine else None
+                if edits is None:
+                    patches.append({"op": "morph", "id": cid, "html": to_html(node)})
+                elif edits:
+                    patches.append({"op": "edit", "id": cid, "edits": edits})
         self.sync_session_revision()
+        self.resync = False
         return patches
 
     def _has_dirty_ancestor(self, cid: str, dirty: set[str]) -> bool:

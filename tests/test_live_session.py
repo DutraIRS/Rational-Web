@@ -1,5 +1,6 @@
 """Live session sync: a change made in one tab reaches the other tabs of the same browser."""
 
+import json
 import re
 
 from rational import App, Button, Column, Component, Page, State, Text
@@ -64,7 +65,7 @@ async def test_session_change_in_one_tab_updates_the_other():
 
     status, data = await one.event(m1, handler_of(html1))
     assert status == 200
-    assert "Items: 1" in data["patches"][0]["html"]
+    assert "Items: 1" in json.dumps(data["patches"])
 
     batch = await stream.until("Items: 1")
     assert batch["seq"] > 0

@@ -194,7 +194,28 @@ class PageView:
         if not targets:
             return
         old = targets[0]
-        new = parse(patch["html"]).children[0]
+        if patch["op"] == "edit":
+            for kind, path, tag, arg in patch["edits"]:
+                el = old
+                for i in path:
+                    el = [c for c in el.children if isinstance(c, El)][i]
+                assert el.tag == tag, f"edit expected <{tag}> but found <{el.tag}>"
+                if kind == "a":
+                    for name, value in arg.items():
+                        if value is None:
+                            el.attrs.pop(name, None)
+                        else:
+                            el.attrs[name] = value
+                elif kind == "t":
+                    el.children = [arg] if arg else []
+                else:
+                    self._replace(el, arg)
+            return
+        self._replace(old, patch["html"])
+
+    @staticmethod
+    def _replace(old: El, html: str) -> None:
+        new = parse(html).children[0]
         assert isinstance(new, El) and old.parent is not None
         index = old.parent.children.index(old)
         new.parent = old.parent

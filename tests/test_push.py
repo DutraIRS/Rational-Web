@@ -119,7 +119,7 @@ class Stream:
         while True:
             frame = await self.next(timeout)
             assert frame is not None, f"stream ended before {text!r}"
-            if any(text in p["html"] for p in frame.get("patches", [])):
+            if any(text in json.dumps(p) for p in frame.get("patches", [])):
                 return frame
 
     async def close(self):
@@ -168,7 +168,7 @@ async def test_background_task_pushes_patches_over_the_stream():
 
     batch = await stream.until("Count: 3")
     assert batch["seq"] > 0
-    assert batch["patches"][0]["op"] == "morph"
+    assert batch["patches"][0]["op"] == "edit"
     await stream.close()
 
 

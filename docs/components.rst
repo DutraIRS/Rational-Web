@@ -143,8 +143,9 @@ The full set, each taking an optional ``target`` selector (default: the element 
 * dialogs: ``open_dialog`` and ``close_dialog`` (a native ``<dialog>``, closing the nearest one by default)
 * ``focus``, ``confirm``, ``set_theme``, ``toggle_theme``
 
-They are not a Python-to-JavaScript compiler. A server re-render of the same element
-resets classes it changed, so use them for state the server doesn't own.
+They are not a Python-to-JavaScript compiler. The server only patches what changed, so a client-side
+change survives re-renders that don't touch the same attribute or text; if the server does change
+it (or replaces the element), the server wins.
 
 Dialogs, tabs, tables and toasts
 --------------------------------

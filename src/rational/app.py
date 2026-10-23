@@ -86,6 +86,7 @@ class App:
         live_session: bool = False,
         api_only: bool = False,
         cors_origins: Sequence[str] = (),
+        fine_patches: bool = True,
     ) -> None:
         if handler_timeout is not None and handler_timeout <= 0:
             raise ValueError("handler_timeout must be a positive number of seconds or None")
@@ -94,6 +95,7 @@ class App:
         if "*" in cors_origins and len(cors_origins) > 1:
             raise ValueError("cors_origins: use '*' on its own, or list the allowed origins")
         self.api_only = api_only
+        self.fine_patches = fine_patches
         self.cors_origins = tuple(cors_origins)
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers

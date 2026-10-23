@@ -199,7 +199,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [ ] WebSocket transport (optional) and server push for collaborative pages
   (server push over SSE, page-scoped background tasks and live cross-tab session sync have landed)
 - [x] Client-side navigation between pages, with no full reload (`App(client_nav=True)`)
-- [ ] Finer-grained server diffs (text and attribute patches)
+- [x] Finer-grained server diffs (text and attribute patches)
 - [x] More components: `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, with keyboard support for tabs and menus
 - [x] Pluggable session store: `PersistentSessionStore` with a Redis driver (logins and API work on
       any worker and survive restarts); page runtimes remain worker-local, so interactive pages on

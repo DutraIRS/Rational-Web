@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import BaseModel
 
@@ -31,8 +33,8 @@ class Counter(Component):
         return Column(Text(f"{self.label}: {self.count}"), Button(f"+ {self.label}", on_click=self.increment))
 
 
-def make_app(page_cls, path="/"):
-    app = App()
+def make_app(page_cls, path="/", **options):
+    app = App(**options)
     app.page(path)(page_cls)
     return app
 
@@ -348,8 +350,14 @@ def test_user_text_is_escaped_in_patches():
 
     page = TestClient(make_app(Home)).open("/")
     data = page.input("Name", "<img src=x onerror=alert(1)>")
-    assert "<img" not in data["patches"][0]["html"]
-    assert "&lt;img src=x onerror=alert(1)&gt;" in data["patches"][0]["html"]
+    # A text edit is applied with textContent in the browser, so the raw string is safe.
+    assert data["patches"][0]["op"] == "edit"
+    assert "<img src=x onerror=alert(1)>" in json.dumps(data["patches"])
+
+    page = TestClient(make_app(Home, fine_patches=False)).open("/")
+    html = page.input("Name", "<img src=x onerror=alert(1)>")["patches"][0]["html"]
+    assert "<img" not in html
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html
 
 
 def test_form_controls_are_labelled_and_described():

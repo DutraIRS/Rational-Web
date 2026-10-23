@@ -28,9 +28,11 @@ Decisions
    * - Rendering
      - Async render pass → immutable node IR → deterministic HTML serializer.
    * - Updates
-     - The server re-renders each *dirty component* and sends its HTML; the runtime
-       **morphs** the live DOM toward it (keyed by ``data-rw-key``/``data-rw-c``/``id``),
-       preserving focus and caret. The ``op`` field leaves room for finer patches later.
+     - The server re-renders each *dirty component*, diffs it against its previous tree and sends
+       the smallest safe patch: text and attribute **edits** addressed by element path, or an HTML
+       **morph** of the smallest differing subtree (keyed by ``data-rw-key``/``data-rw-c``/``id``),
+       preserving focus and caret. A path that no longer matches makes the browser reload.
+       ``App(fine_patches=False)`` always sends whole-component morphs.
    * - Transport
      - HTTP ``POST`` per event, one in flight per tab (client queue; input coalescing).
        WebSockets are deferred.
@@ -95,6 +97,7 @@ Known limitations
 
 * Server-held page state requires one process or sticky sessions.
 * Unkeyed siblings of the same class in conditional branches can swap state: use ``key=``.
-* ``js.*`` changes to an element are reset when the server re-renders it.
+* ``js.*`` changes survive a server re-render unless the server changes that same attribute or
+  replaces the element (with ``fine_patches=False`` they are reset).
 * Mounted sub-applications do not receive lifespan events, so ``on_startup`` hooks of a
   mounted ``App`` must be called by the host application.

@@ -155,9 +155,10 @@
     if (data.csrf) M.csrf = data.csrf;
     if (data.css && data.css.length) insertCss(data.css);
     for (const p of data.patches || []) {
-      if (p.op !== "morph") continue;
       const el = document.querySelector(`[data-rw-c="${CSS.escape(p.id)}"]`);
       if (!el) continue;
+      if (p.op === "edit") { if (!applyEdits(el, p.edits)) { location.reload(); return; } continue; }
+      if (p.op !== "morph") continue;
       const tpl = document.createElement("template");
       tpl.innerHTML = p.html;
       const next = tpl.content.firstElementChild;
@@ -209,6 +210,41 @@
 
   function emit(target, type, detail) {
     target.dispatchEvent(new CustomEvent(type, { bubbles: true, detail }));
+  }
+
+  // ---- fine-grained edits ----------------------------------------------------------------
+  // Each edit is [kind, path, tag, arg]; a tag mismatch means the DOM drifted from what the server
+  // diffed against (an extension, a browser-inserted tbody...), so the caller falls back to a reload.
+  function applyEdits(root, edits) {
+    for (const [kind, path, tag, arg] of edits) {
+      let el = root;
+      for (const i of path) el = el && el.children[i];
+      if (!el || el.localName !== tag) return false;
+      if (el.hasAttribute("data-rw-ignore")) continue;
+      if (kind === "a") {
+        const focused = document.activeElement === el;
+        for (const name of Object.keys(arg)) {
+          if (focused && name === "value") continue;
+          if (arg[name] === null) el.removeAttribute(name); else el.setAttribute(name, arg[name]);
+        }
+        if (el instanceof HTMLInputElement) {
+          if (el.type === "checkbox" || el.type === "radio") el.checked = el.hasAttribute("checked");
+          else if (!focused) el.value = el.getAttribute("value") ?? "";
+        } else if (el instanceof HTMLOptionElement && el.parentElement instanceof HTMLSelectElement) {
+          if (el.hasAttribute("selected")) el.parentElement.value = el.value;
+        }
+      } else if (kind === "t") {
+        if (el instanceof HTMLTextAreaElement) { if (document.activeElement !== el) el.value = arg; }
+        else el.textContent = arg;
+      } else if (kind === "h") {
+        const tpl = document.createElement("template");
+        tpl.innerHTML = arg;
+        const next = tpl.content.firstElementChild;
+        if (!next) return false;
+        morph(el, next);
+      }
+    }
+    return true;
   }
 
   // ---- morphing --------------------------------------------------------------------------

@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Fine-grained patches: after an event the server diffs each re-rendered component against its
+  previous tree and sends text/attribute edits (or a morph of the smallest changed subtree) instead
+  of the whole component, so client-side `js.*` changes survive unrelated updates. Turn off with
+  `App(fine_patches=False)`.
 - `rational new NAME` scaffolds a small runnable project (app, page, test, README, requirements).
 - Persistent sessions: `App(session_store=PersistentSessionStore(driver))` keeps the CSRF token and
   `session.data` (JSON, never pickle) outside the process, through a four-method async
