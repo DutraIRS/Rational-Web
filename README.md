@@ -213,7 +213,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Streaming SSR and loading states (via `Suspense` and the push stream)
 - [x] Form helpers bound to Pydantic models (`ModelForm`)
 - [x] Internationalization
-- [ ] Optional Bootstrap and Tailwind adapters
+- [x] Optional Bootstrap and Tailwind adapters
 
 **1.0: stability**
 - [ ] Frozen public API with a deprecation policy

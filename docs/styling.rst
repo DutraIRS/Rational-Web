@@ -78,6 +78,32 @@ Themes
 Every theme includes a reset, a visible ``:focus-visible`` ring and
 ``prefers-reduced-motion`` support.
 
+Bootstrap, Tailwind and other stylesheets
+-----------------------------------------
+
+Typed ``Style`` stays the default, but you can bring a CSS framework or your own files:
+
+.. code-block:: python
+
+    from rational import App, bootstrap, tailwind, cx, Asset
+
+    App(adapter=bootstrap(js=True))                       # pinned jsDelivr build with integrity hashes
+    App(adapter=tailwind(css="/static/tailwind.css"))     # CSS built by the Tailwind CLI
+    App(stylesheets=["/static/site.css"], scripts=[Asset("https://cdn.example/x.js", integrity="sha384-...")])
+
+    h("button", "Save", class_=cx("btn", {"btn-primary": primary}))   # class names on any element
+
+* Assets go in every page's ``<head>``. Root-relative URLs are served by your app (mount a folder with
+  ``app.static``) and honour ``--root-path``. Absolute URLs must be ``https://``.
+* With ``App(csp=True)`` the origins of your external assets are added to ``script-src`` / ``style-src``
+  and nothing else is loosened.
+* ``bootstrap()`` knows the integrity hashes for 5.3.3; for another version pass
+  ``integrity=(css_hash, js_hash)``.
+* Tailwind: point the CLI's content globs at your ``*.py`` files and serve its output. ``tailwind(play_cdn=True)``
+  is for prototypes only: it is unpinned, compiles in the browser and needs inline styles, so it is rejected
+  with ``csp=True``.
+* The Rational theme and base CSS still load, so built-in components keep working next to framework classes.
+
 Layout primitives
 -----------------
 

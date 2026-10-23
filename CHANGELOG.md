@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `App(adapter=bootstrap() | tailwind(...), stylesheets=, scripts=)` with `Asset` (integrity, https-only),
+  CSP origins for external assets, and `cx()` for class names.
 - `Suspense` and `Skeleton`: respond with a fallback immediately and push slow content when ready;
   `data-rw-busy` on `<html>` plus a progress bar while events are in flight.
 - Migrations: `rational db init|revision|upgrade|downgrade|current|history` drives Alembic from the

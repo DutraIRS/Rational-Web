@@ -41,13 +41,22 @@ def csrf_ok(request: Request, session: Session) -> bool:
     return hmac.compare_digest(request.headers.get(CSRF_HEADER, ""), session.csrf)
 
 
-def security_headers(response: Response, nonce: str | None, *, inline_styles: bool = False) -> None:
+def security_headers(
+    response: Response,
+    nonce: str | None,
+    *,
+    inline_styles: bool = False,
+    style_origins: Sequence[str] = (),
+    script_origins: Sequence[str] = (),
+) -> None:
     for name, value in _SECURITY_HEADERS.values():
         response.headers[name.decode("ascii")] = value.decode("ascii")
     if nonce is not None:
         style_src = "'self' 'unsafe-inline'" if inline_styles else f"'self' 'nonce-{nonce}'"
+        style_src = " ".join([style_src, *style_origins])
+        script_src = " ".join(["'self'", *script_origins])
         response.headers["Content-Security-Policy"] = (
-            f"default-src 'self'; script-src 'self'; style-src {style_src}; img-src 'self' data: https:; "
+            f"default-src 'self'; script-src {script_src}; style-src {style_src}; img-src 'self' data: https:; "
             "object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'"
         )
 

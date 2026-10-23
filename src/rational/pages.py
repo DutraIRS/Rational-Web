@@ -157,10 +157,10 @@ class PageRoute:
             runtime_src=base + app.runtime_src,
             nonce=nonce,
             favicon=app.favicon,
-            head_extra=app.dev_head(nonce, base),
+            head_extra=app.head_extra(nonce, base),
         )
         response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
-        security_headers(response, nonce)
+        security_headers(response, nonce, style_origins=app.style_origins, script_origins=app.script_origins)
         return finish(response)
 
 
@@ -181,8 +181,14 @@ def error_page(app: App, request: Request, status: int, message: str) -> HTMLRes
         data_theme=app.data_theme(request),
         nonce=nonce,
         favicon=app.favicon,
-        head_extra=app.dev_head(nonce, base_path(request)),
+        head_extra=app.head_extra(nonce, base_path(request)),
     )
     response = HTMLResponse(html, status_code=status)
-    security_headers(response, nonce, inline_styles=True)
+    security_headers(
+        response,
+        nonce,
+        inline_styles=True,
+        style_origins=app.style_origins,
+        script_origins=app.script_origins,
+    )
     return response

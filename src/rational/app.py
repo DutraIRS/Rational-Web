@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 
 from .apidocs import swagger_html
+from .assets import Adapter, Asset, as_asset, render_assets
 from .component import Page
 from .concurrency import SyncHandlers
 from .context import Context
@@ -89,6 +90,9 @@ class App:
         cors_origins: Sequence[str] = (),
         fine_patches: bool = True,
         i18n: I18n | None = None,
+        adapter: Adapter | None = None,
+        stylesheets: Sequence[str | Asset] = (),
+        scripts: Sequence[str | Asset] = (),
     ) -> None:
         if handler_timeout is not None and handler_timeout <= 0:
             raise ValueError("handler_timeout must be a positive number of seconds or None")
@@ -99,6 +103,10 @@ class App:
         self.api_only = api_only
         self.fine_patches = fine_patches
         self.i18n = i18n
+        if adapter is not None and adapter.needs_inline_styles and csp:
+            raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
+        self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
+        self.scripts = (*(adapter.scripts if adapter else ()), *map(as_asset, scripts))
         self.cors_origins = tuple(cors_origins)
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers
@@ -360,6 +368,18 @@ class App:
             csrf=session.csrf if session else None,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    def head_extra(self, nonce: str | None, base: str = "") -> str:
+        """Configured stylesheets and scripts, then the dev script (debug only)."""
+        return render_assets(self.stylesheets, self.scripts, base, nonce) + self.dev_head(nonce, base)
+
+    @property
+    def style_origins(self) -> list[str]:
+        return sorted({a.origin for a in self.stylesheets if a.origin})
+
+    @property
+    def script_origins(self) -> list[str]:
+        return sorted({a.origin for a in self.scripts if a.origin})
 
     def dev_head(self, nonce: str | None, base: str = "") -> str:
         """The live-reload/error-overlay script tag, in debug mode only."""
