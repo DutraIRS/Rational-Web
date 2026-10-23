@@ -74,7 +74,7 @@ there**:
 | | |
 |---|---|
 | Components | Props from annotations, `State` (component/page/session scope), keyed identity, async `mount()`/`render()` |
-| Primitives | `Text`, `Heading`, `Button`, `Link`, `Image`, `Badge`, `Avatar`, `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, `Row`/`Column`/`Stack`/`Grid`, `Card`, `Container`, `Form`, `Input`, `Textarea`, `Select`, `Checkbox`, semantic regions, `h()` for anything else |
+| Primitives | `Text`, `Heading`, `Button`, `Link`, `Image`, `Badge`, `Avatar`, `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, `ModelForm`, `Row`/`Column`/`Stack`/`Grid`, `Card`, `Container`, `Form`, `Input`, `Textarea`, `Select`, `Checkbox`, semantic regions, `h()` for anything else |
 | Events | `on_click`, `on_input` (debounced), `on_change`, `on_submit`, `on_enter`, `on_keydown`, `on_blur`; sync or async; lambdas capture values server-side |
 | Forms | Pydantic validation from handler annotations; `FieldError` for business rules; messages shown under the right field |
 | Local interactions | `js.confirm`, `js.toggle_class`, `js.set_attr`, `js.focus`, `js.set_theme`... run with no round trip |
@@ -209,7 +209,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Structured logging and request telemetry (`app.logging`): request IDs, event timing,
       slow-render tracing, standard-library logs + optional OpenTelemetry spans
 - [ ] Streaming SSR and loading states
-- [ ] Form helpers bound to Pydantic models
+- [x] Form helpers bound to Pydantic models (`ModelForm`)
 - [ ] Internationalization
 - [ ] Optional Bootstrap and Tailwind adapters
 

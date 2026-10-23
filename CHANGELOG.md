@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `ModelForm(Model, on_submit=...)`: a form generated from a Pydantic model (labels, help text, HTML
+  constraints, selects for enums and literals, pre-filled values, server-side errors).
 - Components `Modal` (native `<dialog>`), `Tabs`, `Table`, `Toast`, `Toasts`, `Menu` and `MenuItem`.
   Modal, tabs, menus and toast dismissal run in the browser with no round trip; tabs and menus
   have arrow-key navigation.

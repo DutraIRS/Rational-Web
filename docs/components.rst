@@ -95,6 +95,31 @@ opaque handler id::
 
 After a handler you can also call ``self.navigate("/path")`` or ``self.run_js(js.focus("#x"))``.
 
+Forms from a model
+------------------
+
+``ModelForm(Model, on_submit=...)`` builds the whole form from a Pydantic model, so the fields,
+labels, constraints and validation come from one place::
+
+   class Signup(BaseModel):
+       username: str = Field(min_length=3, max_length=20, description="Public name")
+       email: str
+       password: str = Field(min_length=8)
+       age: int = Field(ge=18)
+       newsletter: bool = False
+       role: Role = Role.guest          # an Enum or Literal of strings becomes a select
+
+   def join(self, data: Signup): ...    # validated before it runs
+   ModelForm(Signup, on_submit=self.join, submit_label="Join")
+
+``Field(title=, description=)`` set the label and help text; ``min_length``, ``max_length``, ``ge``
+and ``le`` become HTML attributes (the server still validates). Names containing ``password`` or
+``email`` get the right input type, and a password is never echoed back. Use
+``json_schema_extra={"widget": "textarea"}`` (or ``"email"``, ``"url"``, ``"tel"``, ``"date"``…) to choose a
+control. ``values=`` takes a dict or model instance to pre-fill an edit form, ``errors=`` shows
+server-side messages, and ``exclude=`` drops fields. For anything custom, compose ``Form`` with
+``Input``, ``Select`` and friends instead.
+
 Browser-local operations
 ------------------------
 
