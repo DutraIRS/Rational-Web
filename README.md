@@ -74,7 +74,7 @@ there**:
 | | |
 |---|---|
 | Components | Props from annotations, `State` (component/page/session scope), keyed identity, async `mount()`/`render()` |
-| Primitives | `Text`, `Heading`, `Button`, `Link`, `Image`, `Badge`, `Avatar`, `Row`/`Column`/`Stack`/`Grid`, `Card`, `Container`, `Form`, `Input`, `Textarea`, `Select`, `Checkbox`, semantic regions, `h()` for anything else |
+| Primitives | `Text`, `Heading`, `Button`, `Link`, `Image`, `Badge`, `Avatar`, `Modal`, `Tabs`, `Table`, `Toast`, `Row`/`Column`/`Stack`/`Grid`, `Card`, `Container`, `Form`, `Input`, `Textarea`, `Select`, `Checkbox`, semantic regions, `h()` for anything else |
 | Events | `on_click`, `on_input` (debounced), `on_change`, `on_submit`, `on_enter`, `on_keydown`, `on_blur`; sync or async; lambdas capture values server-side |
 | Forms | Pydantic validation from handler annotations; `FieldError` for business rules; messages shown under the right field |
 | Local interactions | `js.confirm`, `js.toggle_class`, `js.set_attr`, `js.focus`, `js.set_theme`... run with no round trip |
@@ -200,7 +200,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
   (server push over SSE, page-scoped background tasks and live cross-tab session sync have landed)
 - [x] Client-side navigation between pages, with no full reload (`App(client_nav=True)`)
 - [ ] Finer-grained server diffs (text and attribute patches)
-- [ ] More components: `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, with full keyboard support
+- [ ] More components: `Menu` (`Modal`, `Tabs`, `Table` and `Toast` have landed)
 - [ ] Pluggable session store (for example Redis); page runtimes remain worker-local, so
       multi-worker deployments still need sticky routing
 

@@ -121,6 +121,26 @@ The full set, each taking an optional ``target`` selector (default: the element 
 They are not a Python-to-JavaScript compiler. A server re-render of the same element
 resets classes it changed, so use them for state the server doesn't own.
 
+Dialogs, tabs, tables and toasts
+--------------------------------
+
+These run in the browser with no round trip, built on the operations above and on native
+elements (``<dialog>``, ``role=tab``)::
+
+   Button("Delete…", on_click=js.open_dialog("#confirm"))
+   Modal(Text("Really?"), Button("Yes", on_click=self.delete), id="confirm", title="Delete")
+
+   Tabs([("Profile", ProfileForm()), ("Billing", BillingForm())], id="settings")
+
+   Table(["Name", "Role"], [["Ada", "Admin"], ["Linus", Badge("Guest")]], empty="No users")
+
+   Toasts(Toast("Saved", tone="success"))
+
+``Modal`` gets focus trapping, a backdrop and Escape from the browser. ``Tabs`` renders every
+panel and shows the selected one; a server re-render that changes the tabs resets the selection.
+Toasts are dismissed in the browser; render them from state to show one on demand. ``id`` values
+must be unique on the page and CSS-safe.
+
 Escape hatches
 --------------
 
