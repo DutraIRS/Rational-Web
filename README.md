@@ -210,7 +210,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Alembic migration workflow
 - [x] Structured logging and request telemetry (`app.logging`): request IDs, event timing,
       slow-render tracing, standard-library logs + optional OpenTelemetry spans
-- [ ] Streaming SSR and loading states
+- [x] Streaming SSR and loading states (via `Suspense` and the push stream)
 - [x] Form helpers bound to Pydantic models (`ModelForm`)
 - [x] Internationalization
 - [ ] Optional Bootstrap and Tailwind adapters

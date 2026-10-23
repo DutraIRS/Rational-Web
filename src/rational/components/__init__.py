@@ -21,8 +21,11 @@ from .layout import (
 )
 from .modelform import ModelForm
 from .overlay import Menu, MenuItem, Modal, Table, Tabs, Toast, Toasts
+from .suspense import Skeleton, Suspense
 
 __all__ = [
+    "Skeleton",
+    "Suspense",
     "Avatar",
     "Badge",
     "ModelForm",

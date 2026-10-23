@@ -102,6 +102,7 @@
     busy = true;
     const mine = epoch;
     const el = item.el;
+    document.documentElement.setAttribute("data-rw-busy", "");
     if (el && item.name !== "input") el.setAttribute("aria-busy", "true");
     try {
       const res = await fetch(M.endpoint, {
@@ -129,6 +130,7 @@
     } finally {
       if (el) el.removeAttribute("aria-busy");
       busy = false;
+      if (!queue.length) document.documentElement.removeAttribute("data-rw-busy");
       pump();
     }
   }

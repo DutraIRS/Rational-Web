@@ -87,6 +87,24 @@ the stream only when it has tasks. Details worth knowing:
   small and consistent. Request-scoped helpers such as ``self.context`` refer to the most recent
   event and may be stale; prefer services and ``self.app``.
 
+Loading states and deferred content
+-----------------------------------
+
+``Suspense`` sends the page immediately with a fallback and pushes the real content when it is
+ready, so one slow query never delays the first paint:
+
+.. code-block:: python
+
+    Suspense(load=self.load_report, fallback=Skeleton(height="12rem"), error=Text("Report unavailable"))
+
+``load`` is a sync or async callable returning anything renderable. It runs as a background task (see
+above), so the page becomes interactive and opens the push stream. If ``load`` raises, the exception is
+logged and ``error`` is shown. Without JavaScript only the fallback appears, so keep essential content
+out of ``Suspense``. ``Skeleton(width=, height=)`` is a shimmering placeholder block.
+
+While an event is in flight the runtime sets ``data-rw-busy`` on ``<html>`` (a thin progress bar
+appears after 150 ms) and ``aria-busy="true"`` on the element that triggered it. Both are styleable.
+
 Live sessions across tabs
 -------------------------
 

@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `Suspense` and `Skeleton`: respond with a fallback immediately and push slow content when ready;
+  `data-rw-busy` on `<html>` plus a progress bar while events are in flight.
 - Migrations: `rational db init|revision|upgrade|downgrade|current|history` drives Alembic from the
   app's `Database` (no `alembic.ini`), plus `await db.upgrade()` and `Database(metadata=...)`.
   Install with `rational[migrations]`.
