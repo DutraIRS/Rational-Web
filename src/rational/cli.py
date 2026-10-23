@@ -11,6 +11,9 @@ Modes
 Hot reload uses a small supervisor rather than uvicorn's reloader (which can hang on
 Windows): the app runs in a child process that restarts whenever a ``*.py`` file changes.
 
+``--export DIR`` does not serve at all: it writes the app's static pages to ``DIR`` as plain
+HTML (see :mod:`rational.export`).
+
 Page views live in process memory, so ``--workers`` > 1 needs sticky sessions.
 """
 
@@ -101,8 +104,6 @@ def resolve_mode(requested: str | None) -> str:
 
 def serve(app: App, argv: Sequence[str] | None = None, *, target: Target | None = None, **overrides: Any) -> None:
     """Parse ``argv`` (default: ``sys.argv[1:]``) and run ``app`` with uvicorn."""
-    import uvicorn
-
     args = build_parser().parse_args(sys.argv[1:] if argv is None else list(argv))
     if args.export:
         raise SystemExit(export(app, args.export, args.root_path))
@@ -110,31 +111,39 @@ def serve(app: App, argv: Sequence[str] | None = None, *, target: Target | None 
     target = target or _main_target(app)
     port = overrides.pop("port", None) or args.port or int(os.environ.get("PORT", 8000))
     options: dict[str, Any] = {"port": port, "root_path": args.root_path, "log_level": args.log_level or "info"}
+    run = _serve_dev if mode == "dev" else _serve_prod
+    run(app, args, target, options, overrides)
 
-    if mode == "dev":
-        os.environ[DEV_ENV] = "1"
-        app.debug = True
-        options["host"] = overrides.pop("host", None) or args.host or "127.0.0.1"
-        reload = target is not None and not args.no_reload
-        if not os.environ.get(SUPERVISED_ENV):
-            _banner(
-                "development",
-                options["host"],
-                port,
-                [
-                    "hot reload on" if reload else "hot reload off (run the app file as a script to enable it)",
-                    "readable errors, live browser reload",
-                    *_api_note(app, options["host"], port),
-                    "not for production: use --prod",
-                ],
-            )
-            if options["host"] not in ("127.0.0.1", "localhost", "::1"):
-                print("  !  dev mode on a public interface exposes tracebacks and source code.\n")
-        if reload and target is not None:
-            supervise(target, args, options["host"], port)
-        else:
-            uvicorn.run(app, **options, **overrides)
-        return
+
+def _serve_dev(
+    app: App, args: argparse.Namespace, target: Target | None, options: dict[str, Any], overrides: dict[str, Any]
+) -> None:
+    import uvicorn
+
+    os.environ[DEV_ENV] = "1"
+    app.debug = True
+    host = options["host"] = overrides.pop("host", None) or args.host or "127.0.0.1"
+    reload = target is not None and not args.no_reload
+    if not os.environ.get(SUPERVISED_ENV):  # the supervisor already printed the banner
+        notes = [
+            "hot reload on" if reload else "hot reload off (run the app file as a script to enable it)",
+            "readable errors, live browser reload",
+            *_api_note(app, host, options["port"]),
+            "not for production: use --prod",
+        ]
+        _banner("development", host, options["port"], notes)
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            print("  !  dev mode on a public interface exposes tracebacks and source code.\n")
+    if reload and target is not None:
+        supervise(target, args, host, options["port"])
+    else:
+        uvicorn.run(app, **options, **overrides)
+
+
+def _serve_prod(
+    app: App, args: argparse.Namespace, target: Target | None, options: dict[str, Any], overrides: dict[str, Any]
+) -> None:
+    import uvicorn
 
     os.environ.pop(DEV_ENV, None)
     app.debug = False
@@ -144,17 +153,18 @@ def serve(app: App, argv: Sequence[str] | None = None, *, target: Target | None 
         forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
         server_header=False,
     )
-    notes = [f"pages at /, API at {app.api_prefix}, assets at /_rational", *_api_note(app, options["host"], port)]
+    notes = [f"pages at /, API at {app.api_prefix}, assets at /_rational"]
+    notes += _api_note(app, options["host"], options["port"])
     if args.workers > 1:
         notes.append(f"{args.workers} workers: page sessions are per process, so use sticky sessions")
-    _banner("production", options["host"], port, notes)
-    if args.workers > 1:
-        if target is None:
-            raise SystemExit("--workers > 1 needs an importable app: python -m rational module:app --prod")
-        module, attr, directory = target
-        uvicorn.run(f"{module}:{attr}", workers=args.workers, app_dir=directory, **options, **overrides)
-    else:
+    _banner("production", options["host"], options["port"], notes)
+    if args.workers <= 1:
         uvicorn.run(app, **options, **overrides)
+        return
+    if target is None:
+        raise SystemExit("--workers > 1 needs an importable app: python -m rational module:app --prod")
+    module, attr, directory = target
+    uvicorn.run(f"{module}:{attr}", workers=args.workers, app_dir=directory, **options, **overrides)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
