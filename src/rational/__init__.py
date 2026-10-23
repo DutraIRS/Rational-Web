@@ -48,6 +48,7 @@ from .concurrency import HandlerTimeout, threaded, timeout
 from .context import Context
 from .errors import FieldError, Forbidden, NotFound, RemoteError, Unauthorized, redirect
 from .events import Event, js
+from .i18n import I18n
 from .logging import Logging
 from .rendering import h, unsafe_html
 from .router import Router
@@ -82,6 +83,7 @@ __all__ = [
     "HandlerTimeout",
     "Header",
     "Heading",
+    "I18n",
     "Image",
     "Input",
     "Link",

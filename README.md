@@ -212,7 +212,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
       slow-render tracing, standard-library logs + optional OpenTelemetry spans
 - [ ] Streaming SSR and loading states
 - [x] Form helpers bound to Pydantic models (`ModelForm`)
-- [ ] Internationalization
+- [x] Internationalization
 - [ ] Optional Bootstrap and Tailwind adapters
 
 **1.0: stability**

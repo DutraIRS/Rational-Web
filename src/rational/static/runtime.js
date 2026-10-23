@@ -345,6 +345,10 @@
     focus: (el, sel) => { const t = targets(el, sel)[0]; if (t) t.focus(); },
     confirm: (_el, _sel, message) => window.confirm(message),
     set_theme: (_el, _sel, mode) => setTheme(mode),
+    set_locale: (_el, _sel, tag) => {
+      document.cookie = `rw_lang=${encodeURIComponent(tag)}; path=/; max-age=31536000; samesite=lax`;
+      location.reload();
+    },
     toggle_theme: () => {
       const root = document.documentElement;
       const current = root.getAttribute("data-theme") ||

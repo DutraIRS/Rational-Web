@@ -149,7 +149,7 @@ class PageRoute:
             body=to_html(root),
             title=page.title or self.title or app.title,
             description=page.description,
-            lang=app.lang,
+            lang=ctx.locale,
             theme_href=base + app.theme_href,
             page_css=runtime.sheet.css(),
             data_theme=app.data_theme(request),

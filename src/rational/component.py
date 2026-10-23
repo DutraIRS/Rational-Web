@@ -113,6 +113,10 @@ class Component:
     def app(self) -> App | None:
         return self.context.app
 
+    def t(self, key: str, **params: Any) -> str:
+        """Translate ``key`` for the visitor's locale (see :mod:`rational.i18n`)."""
+        return self.context.t(key, **params)
+
     def use(self, service: type[S]) -> S:
         """An instance of ``service`` bound to the current request context."""
         return service(self.context)

@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from .backend.database import Database
     from .session import Session
 
+from .i18n import LANG_COOKIE
+
 _UNRESOLVED: Any = object()
 
 
@@ -26,6 +28,7 @@ class Context:
         self._session = session
         self.session_created = False
         self._user: Any = _UNRESOLVED
+        self._locale: str | None = None
 
     @property
     def session(self) -> Session:
@@ -41,6 +44,27 @@ class Context:
 
     def peek_session(self) -> Session | None:
         return self._session
+
+    @property
+    def locale(self) -> str:
+        """The negotiated language tag (``App.lang`` when the app has no ``i18n``)."""
+        if self._locale is None:
+            app = self.app
+            if app is None:
+                self._locale = "en"
+            elif app.i18n is None:
+                self._locale = app.lang
+            else:
+                headers = self.request.headers if self.request is not None else {}
+                cookies = self.request.cookies if self.request is not None else {}
+                self._locale = app.i18n.negotiate(cookies.get(LANG_COOKIE), headers.get("accept-language"))
+        return self._locale
+
+    def t(self, key: str, **params: Any) -> str:
+        """Translate ``key`` into this request's locale."""
+        if self.app is None or self.app.i18n is None:
+            return key
+        return self.app.i18n.translate(self.locale, key, **params)
 
     @property
     def user(self) -> Any:

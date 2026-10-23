@@ -1,0 +1,32 @@
+Internationalization
+====================
+
+Give the app message catalogs and every component can translate:
+
+.. code-block:: python
+
+    from rational import App, I18n, Page, Text, Button, js
+
+    app = App(i18n=I18n({
+        "en": {"hello": "Hello, {name}!", "items.one": "{count} item", "items.other": "{count} items"},
+        "pt": {"hello": "Olá, {name}!", "items.one": "{count} item", "items.other": "{count} itens"},
+    }))
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Text(self.t("hello", name="Ada"))
+
+* ``self.t(key, **params)`` in components and ``ctx.t(...)`` anywhere you have a context.
+* Params use ``str.format`` placeholders. A missing param stays visible as ``{name}``.
+* Plurals: pass ``count=`` and define ``key.one`` / ``key.other`` (and optionally ``.zero`` / ``.two``).
+* A missing key falls back to the default catalog, then to the key itself.
+* ``I18n.from_directory("locales")`` loads ``locales/en.json``, ``locales/pt.json``... (flat objects).
+
+The locale is the ``rw_lang`` cookie, then ``Accept-Language`` (honouring ``q`` values, ``pt-BR``
+matching ``pt``), then the first catalog (or ``default=``). ``<html lang>`` follows it, and
+``ctx.locale`` / ``Context.locale`` exposes the tag. Switch languages from the browser with
+``js.set_locale("pt")``, which sets the cookie and reloads.
+
+Number and date formatting is left to ``babel`` or the standard library; ``ctx.locale`` is the tag to
+pass them.

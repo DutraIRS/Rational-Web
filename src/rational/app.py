@@ -25,6 +25,7 @@ from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
 from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddleware, base_path
+from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, error_page
 from .protocol import EVENT_PATH, STREAM_PATH, handle_event, handle_stream
@@ -87,6 +88,7 @@ class App:
         api_only: bool = False,
         cors_origins: Sequence[str] = (),
         fine_patches: bool = True,
+        i18n: I18n | None = None,
     ) -> None:
         if handler_timeout is not None and handler_timeout <= 0:
             raise ValueError("handler_timeout must be a positive number of seconds or None")
@@ -96,6 +98,7 @@ class App:
             raise ValueError("cors_origins: use '*' on its own, or list the allowed origins")
         self.api_only = api_only
         self.fine_patches = fine_patches
+        self.i18n = i18n
         self.cors_origins = tuple(cors_origins)
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers

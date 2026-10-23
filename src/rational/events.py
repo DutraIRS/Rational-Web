@@ -69,6 +69,11 @@ class js:  # noqa: N801 - used as a namespace: js.toggle_class(...)
         return ClientOp("set_theme", (None, mode))
 
     @staticmethod
+    def set_locale(tag: str) -> ClientOp:
+        """Remember the language in a cookie and reload so the server renders it."""
+        return ClientOp("set_locale", (None, tag))
+
+    @staticmethod
     def toggle_theme() -> ClientOp:
         return ClientOp("toggle_theme", (None,))
 

@@ -81,6 +81,7 @@ Not sure where *you* should start?
    projects
    running
    concurrency
+   i18n
    security
    testing
 
