@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import logging
@@ -40,7 +41,10 @@ from .styling.theme import Theme, ThemeMode, get_theme
 
 if TYPE_CHECKING:
     from .backend.database import Database
+    from .bus import Bus
     from .stores import SessionDriver
+
+log = logging.getLogger("rational")
 
 P = TypeVar("P", bound=type[Page])
 T = TypeVar("T", bound=type)
@@ -94,6 +98,7 @@ class App:
         websocket: bool = False,
         page_snapshots: SessionDriver | None = None,
         page_snapshot_ttl: int = 60 * 60 * 24,
+        bus: Bus | None = None,
         i18n: I18n | None = None,
         adapter: Adapter | None = None,
         stylesheets: Sequence[str | Asset] = (),
@@ -138,6 +143,10 @@ class App:
 
         self.compiler = StyleCompiler(self.theme, breakpoints, containers)
         self.sessions: SessionBackend = session_store or SessionStore(ttl=session_ttl)
+        self.bus = bus
+        self._followed: dict[str, Any] = {}
+        if bus is not None and hasattr(self.sessions, "on_saved"):
+            self.sessions.on_saved = self._announce_session
         self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
         self.routes: dict[type[Page], PageRoute] = {}
         self.resume: PageResumer | None = (
@@ -440,6 +449,52 @@ class App:
             return Response(content, media_type=media_type, headers=_IMMUTABLE)
 
         return serve
+
+    # -- cross-worker live sessions ------------------------------------------------------------
+
+    @staticmethod
+    def _channel(sid: str) -> str:
+        return f"rational:session:{sid}"
+
+    async def _announce_session(self, session: Session) -> None:
+        if self.bus is None:
+            return
+        try:
+            await self.bus.publish(self._channel(session.id), self.boot_id)
+        except Exception:
+            log.exception("could not announce a session change")
+
+    def follow_session(self, session: Session) -> None:
+        """Listen for changes other workers make to ``session`` while a page here shows its data."""
+        if self.bus is None or session.id in self._followed:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        sid = session.id
+        self._followed[sid] = None  # claimed; the subscription follows
+
+        def on_message(origin: str) -> None:
+            if origin == self.boot_id:
+                return
+            live = self.sessions.get(sid)
+            if live is None or not live.listeners:
+                unsubscribe = self._followed.pop(sid, None)
+                if unsubscribe is not None:
+                    loop.create_task(unsubscribe())
+                return
+            loop.create_task(self.sessions.load(sid))  # a newer version bumps the session and wakes its pages
+
+        async def subscribe() -> None:
+            assert self.bus is not None
+            try:
+                self._followed[sid] = await self.bus.subscribe(self._channel(sid), on_message)
+            except Exception:
+                self._followed.pop(sid, None)
+                log.exception("could not follow session changes")
+
+        loop.create_task(subscribe())
 
     @asynccontextmanager
     async def _lifespan(self, _app: FastAPI) -> AsyncIterator[None]:

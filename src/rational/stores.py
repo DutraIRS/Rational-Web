@@ -14,7 +14,7 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from .session import Session, TTLStore
@@ -147,6 +147,7 @@ class PersistentSessionStore:
         self.deserialize = deserialize
         self._local: TTLStore[Session] = TTLStore(ttl, max_local)
         self._stale: list[str] = []
+        self.on_saved: Callable[[Session], Awaitable[None]] | None = None  # set by App(bus=...)
 
     def _key(self, sid: str) -> str:
         return self.prefix + sid
@@ -221,6 +222,8 @@ class PersistentSessionStore:
             await self.driver.set(key, self.serialize(payload), self.ttl)
             session.saved_revision = session.revision
             session.touched_at = time.monotonic()
+            if self.on_saved is not None:
+                await self.on_saved(session)
         elif time.monotonic() - session.touched_at > self.ttl / 4:
             await self.driver.touch(key, self.ttl)  # idle expiry counts reads too, not only writes
             session.touched_at = time.monotonic()

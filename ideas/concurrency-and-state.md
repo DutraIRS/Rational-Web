@@ -10,7 +10,8 @@ Implemented: handler timeouts and `@threaded`, background tasks, SSE push and op
 client navigation, live cross-tab sessions, API-only mode, fine-grained diffs, Suspense, persistent
 sessions, optimistic updates (C3), resumable page state via server-side snapshots (D5, the state-token
 variant was not built) and a serverless/ASGI guide (D4, documentation only, not tested on the
-platforms). Still open: multi-worker pub/sub for push and live sessions (push is per process today).
+platforms). Cross-worker live sessions work through `App(bus=)` (Redis bus tested against a fake only);
+background-task pushes still reach only the worker holding the stream.
 D2 (stateless sessions) is largely covered by `PersistentSessionStore`. The "Where we are" text below
 predates this work.
 

@@ -97,10 +97,33 @@ the handler ids in the browser still match. This means:
 * ``mount()`` and background tasks run again, so keep them idempotent. ``Suspense`` content is loaded again.
 * Only the path parameters of the route are restored, not the query string.
 * Rebuilding checks that the browser's session owns the snapshot.
-* Each event pays one extra write to the driver. A WebSocket or SSE connection that drops is also
-  resumed by the next connection, but a push stream still talks to one process, so live pushes made by
-  a different worker than the one holding the stream are not forwarded. There is no cross-worker pub/sub.
-  Use sticky routing if you rely on background-task pushes with several workers.
+* Each event pays one extra write to the driver.
+* Pushes cross workers only for session data (next section). A push stream still talks to the one
+  process that holds it, so background-task pushes made by a different worker than the one holding the
+  stream are not forwarded. Use sticky routing if you rely on those.
+
+Live sessions across workers
+----------------------------
+
+With ``App(live_session=True)``, tabs of one browser update each other, but only if the same worker
+serves them. Give the app a bus and a persistent session store and a change saved by one worker wakes
+the pages held by the others::
+
+    from rational import App, PersistentSessionStore, RedisBus, RedisSessionDriver
+
+    driver = RedisSessionDriver(url=REDIS_URL)
+    app = App(
+        live_session=True,
+        session_store=PersistentSessionStore(driver),
+        page_snapshots=driver,
+        bus=RedisBus(url=REDIS_URL),
+    )
+
+Each save publishes the session id; a worker that shows that session's data reloads it from the store,
+which marks its pages dirty and pushes. Delivery is best effort and at most once, so a missed message
+only delays the update to the page's next event. ``app.bus`` is also yours for other channels
+(``await app.bus.publish(channel, text)`` and ``await app.bus.subscribe(channel, callback)``).
+The Redis bus is tested here only against a fake client, not a live server.
 
 Client-side navigation
 ----------------------
