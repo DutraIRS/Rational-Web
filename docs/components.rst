@@ -134,6 +134,13 @@ everything after it, including the server event, if the user declines::
 
    Button("Delete", on_click=[js.confirm("Delete this post?"), self.delete])
 
+``js.optimistic(*ops)`` makes a change visible before the server answers. The operations run at
+once; the server's patches then replace them (the server is always the source of truth). If the event
+fails, or the network does, and the server did not re-render the enclosing component, that
+component is restored to how it looked before::
+
+   Button("Like", on_click=[js.optimistic(js.add_class("liked")), self.like])
+
 The full set, each taking an optional ``target`` selector (default: the element itself;
 ``closest:<selector>`` searches ancestors):
 
@@ -141,7 +148,7 @@ The full set, each taking an optional ``target`` selector (default: the element 
 * visibility: ``show``, ``hide``, ``toggle`` (the ``hidden`` attribute) and ``remove``
 * content: ``set_text``, ``set_value`` (fires ``input``), ``copy`` (clipboard), ``scroll_to``
 * dialogs: ``open_dialog`` and ``close_dialog`` (a native ``<dialog>``, closing the nearest one by default)
-* ``focus``, ``confirm``, ``set_theme``, ``toggle_theme``
+* ``focus``, ``confirm``, ``optimistic``, ``set_theme``, ``toggle_theme``
 
 They are not a Python-to-JavaScript compiler. The server only patches what changed, so a client-side
 change survives re-renders that don't touch the same attribute or text; if the server does change

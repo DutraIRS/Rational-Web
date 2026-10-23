@@ -14,6 +14,7 @@
   let source = null;
   let epoch = 0;  // bumped on every client-side navigation so late responses from the old page are ignored
   let navAbort = null;
+  let pendingSnapshot = null;  // set by js.optimistic, claimed by the event it precedes
   let here = location.pathname + location.search;
   const held = [];  // pushed batches that arrived while an event was in flight
   const queue = [];
@@ -40,7 +41,7 @@
       e.preventDefault();
     }
     if (ops && runOps(JSON.parse(ops), el) === false) { e.preventDefault(); return; }
-    if (!handler) return;
+    if (!handler) { pendingSnapshot = null; return; }
     if (name === "click" && (el.disabled || el.getAttribute("aria-disabled") === "true")) return;
     if (name === "input") {
       clearTimeout(timers.get(el));
@@ -86,12 +87,26 @@
   // ---- transport ------------------------------------------------------------------------
   function enqueue(handler, name, el, e) {
     const payload = payloadFor(name, el, e);
+    const snapshot = pendingSnapshot;
+    pendingSnapshot = null;
     if (name === "input") {
       const pending = queue.find((q) => q.handler === handler && q.name === "input");
       if (pending) { pending.payload = payload; return; }
     }
-    queue.push({ handler, name, el, payload });
+    queue.push({ handler, name, el, payload, snapshot });
     pump();
+  }
+
+  // Put back a component that an optimistic operation changed, unless the server re-rendered it.
+  function rollback(item, data) {
+    const snap = item.snapshot;
+    if (!snap) return;
+    if (data && (data.patches || []).some((p) => p.id === snap.id)) return;
+    const el = document.querySelector(`[data-rw-c="${CSS.escape(snap.id)}"]`);
+    const tpl = document.createElement("template");
+    tpl.innerHTML = snap.html;
+    const prev = tpl.content.firstElementChild;
+    if (el && prev) morph(el, prev);
   }
 
   async function pump() {
@@ -121,10 +136,11 @@
       while (held.length && held[0].seq < seq) apply(held.shift());
       apply(data);
       while (held.length) apply(held.shift());
-      if (data.error) showError(data.error, el);
+      if (data.error) { rollback(item, data); showError(data.error, el); }
       else if (el && item.name === "submit") clearErrors(el);
     } catch (err) {
       while (held.length) apply(held.shift());
+      rollback(item, null);
       emit(document, "rw:offline", { error: String(err) });
       if (M.debug) console.error("[rational]", err);
     } finally {
@@ -370,6 +386,11 @@
     toggle_attr: (el, sel, name, on, off) => targets(el, sel).forEach((t) => t.setAttribute(name, t.getAttribute(name) === on ? off : on)),
     focus: (el, sel) => { const t = targets(el, sel)[0]; if (t) t.focus(); },
     confirm: (_el, _sel, message) => window.confirm(message),
+    optimistic: (el, _sel, json) => {
+      const comp = el.closest("[data-rw-c]");
+      if (comp && !pendingSnapshot) pendingSnapshot = { id: comp.getAttribute("data-rw-c"), html: comp.outerHTML };
+      runOps(JSON.parse(json), el);
+    },
     set_theme: (_el, _sel, mode) => setTheme(mode),
     set_locale: (_el, _sel, tag) => {
       document.cookie = `rw_lang=${encodeURIComponent(tag)}; path=/; max-age=31536000; samesite=lax`;

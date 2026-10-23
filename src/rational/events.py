@@ -8,6 +8,7 @@ Targets are CSS selectors; ``None`` means the element itself and
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +35,20 @@ class ClientOp:
 
 
 class js:  # noqa: N801 - used as a namespace: js.toggle_class(...)
+    @staticmethod
+    def optimistic(*ops: ClientOp) -> ClientOp:
+        """Apply ``ops`` at once and keep them until the server's patches arrive.
+
+        If the event fails (or the network does) and the server did not re-render the surrounding
+        component, the component is restored to how it looked before. Put it before the server handler:
+        ``on_click=[js.optimistic(js.set_text("Saved")), self.save]``.
+        """
+        if not ops:
+            raise ValueError("js.optimistic needs at least one operation")
+        if any(op.op in ("confirm", "optimistic", "set_locale") for op in ops):
+            raise ValueError("js.optimistic cannot wrap confirm, set_locale or another optimistic")
+        return ClientOp("optimistic", (None, json.dumps([op.to_json() for op in ops], separators=(",", ":"))))
+
     @staticmethod
     def toggle_class(cls: str, target: str | None = None) -> ClientOp:
         return ClientOp("toggle_class", (target, cls))

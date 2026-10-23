@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `js.optimistic(*ops)`: apply client operations immediately, with rollback when the event fails.
 - `App(websocket=True)`: server push over a same-origin, session-checked WebSocket with SSE fallback;
   new `websockets` extra.
 - `App(adapter=bootstrap() | tailwind(...), stylesheets=, scripts=)` with `Asset` (integrity, https-only),
