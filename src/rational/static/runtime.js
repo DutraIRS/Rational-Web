@@ -141,7 +141,7 @@
   function insertCss(rules) {
     const sheet = document.getElementById("rw-styles").sheet;
     for (const rule of rules) {
-      try { sheet.insertRule(rule, sheet.cssRules.length); } catch (err) { if (M.debug) console.warn("[rational] bad rule", rule); }
+      try { sheet.insertRule(rule, sheet.cssRules.length); } catch { if (M.debug) console.warn("[rational] bad rule", rule); }
     }
   }
 

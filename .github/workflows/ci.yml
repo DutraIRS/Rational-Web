@@ -71,3 +71,13 @@ jobs:
           python -m venv /tmp/smoke
           /tmp/smoke/bin/pip install dist/*.whl
           cd /tmp && /tmp/smoke/bin/python -c "import rational; print(rational.__version__)"
+
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint:js

@@ -12,7 +12,7 @@
         if (boot && id !== boot) { location.reload(); return; }
         boot = id;
       }
-    } catch (_) { /* restarting */ }
+    } catch { /* restarting */ }
     setTimeout(poll, 600);
   }
   poll();
