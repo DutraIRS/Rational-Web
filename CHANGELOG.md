@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Browser tests run on any Playwright engine via `RATIONAL_BROWSER` (chromium, firefox, webkit); CI runs
+  all three. Firefox and WebKit have not been run locally.
+- `tests/browser/test_a11y.py`: structural accessibility checks (lang, title, one `<main>`, labels,
+  names, duplicate ids, ARIA references, visible focus). Not a full audit; contrast is not measured.
+- `App(bus=MemoryBus() | RedisBus(...))`: workers announce session changes so `live_session` pages
+  update across workers. `app.bus` is available for custom channels.
 - Resumable pages: `App(page_snapshots=driver)` rebuilds a page the server no longer holds from a saved
   JSON snapshot (eviction, restart, another worker). `PersistentSessionStore` now carries JSON-compatible
   session-scope state. `Database(serverless=True)` uses `NullPool`. New "Serverless and ASGI hosts" page.
