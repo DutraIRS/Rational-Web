@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest --ignore=tests/browser
+      - run: python -m pytest --ignore=tests/browser --cov=rational --cov-branch --cov-report=term-missing --cov-fail-under=88
 
   quality:
     runs-on: ubuntu-latest
