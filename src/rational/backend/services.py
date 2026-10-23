@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from fastapi import Request, Response
 from pydantic import create_model
 
+from ..concurrency import invoke
 from ..errors import RationalError, Unauthorized
 from ..http import csrf_ok, json_error
 
@@ -145,9 +146,12 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
             try:
                 if spec.auth == "required" and ctx.user is None:
                     raise Unauthorized()
-                result = getattr(cls(ctx), name)(**kwargs)
-                if inspect.isawaitable(result):
-                    result = await result
+                result = await invoke(
+                    getattr(cls(ctx), name),
+                    kwargs=kwargs,
+                    timeout=app.handler_timeout,
+                    threads=app.sync_handlers == "thread",
+                )
             except RationalError as e:
                 error_response = json_error(e.status, e.code, e.message, details=e.details)
                 app.finish(request, error_response, ctx)

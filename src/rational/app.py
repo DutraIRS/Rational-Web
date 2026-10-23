@@ -20,6 +20,7 @@ from starlette.types import Receive, Scope, Send
 
 from .apidocs import swagger_html
 from .component import Page
+from .concurrency import SyncHandlers
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
@@ -79,7 +80,15 @@ class App:
         event_burst: int = 40,
         event_rate: float = 20.0,
         max_event_bytes: int = 64 * 1024,
+        handler_timeout: float | None = None,
+        sync_handlers: SyncHandlers = "loop",
     ) -> None:
+        if handler_timeout is not None and handler_timeout <= 0:
+            raise ValueError("handler_timeout must be a positive number of seconds or None")
+        if sync_handlers not in ("loop", "thread"):
+            raise ValueError("sync_handlers must be 'loop' or 'thread'")
+        self.handler_timeout = handler_timeout
+        self.sync_handlers = sync_handlers
         self.title = title
         self.api_docs = api_docs
         self.theme = get_theme(theme)

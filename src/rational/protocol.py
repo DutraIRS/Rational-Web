@@ -90,7 +90,12 @@ async def handle_event(app: App, request: Request) -> Response:
             {"event.handler": event.handler, "page.id": event.page},
         ) as span:
             try:
-                await runtime.dispatch(event.handler, event.payload)
+                await runtime.dispatch(
+                    event.handler,
+                    event.payload,
+                    timeout=app.handler_timeout,
+                    threads=app.sync_handlers == "thread",
+                )
             except StaleHandlerError as e:
                 # Unknown handler: the browser is out of sync. Resend the whole page instead of failing.
                 runtime.dirty.add(runtime.page.cid or "")

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from ._tracking import Cell, Frame, current_frame
 from .binding import bind_payload, check_signature
 from .component import Component, Page
+from .concurrency import invoke
 from .errors import RationalError
 from .rendering.builder import normalize_children
 from .rendering.html import to_html
@@ -264,15 +265,15 @@ class PageRuntime:
 
     # -- events ------------------------------------------------------------------------------
 
-    async def dispatch(self, handler_id: str, payload: dict[str, Any]) -> None:
+    async def dispatch(
+        self, handler_id: str, payload: dict[str, Any], *, timeout: float | None = None, threads: bool = False
+    ) -> None:
         entry = self.handlers.get(handler_id)
         if entry is None:
             raise StaleHandlerError()
         _component, handler, event = entry
         args = bind_payload(handler, event, payload)
-        result = handler(*args)
-        if inspect.isawaitable(result):
-            await result
+        await invoke(handler, tuple(args), timeout=timeout, threads=threads)
 
     async def flush(self) -> list[dict[str, Any]]:
         """Rerender dirty components (outermost first) into morph patches."""
