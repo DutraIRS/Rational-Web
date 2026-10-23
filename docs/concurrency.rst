@@ -86,3 +86,23 @@ the stream only when it has tasks. Details worth knowing:
 * Task code does not hold the session or page locks while it runs, so keep each state change
   small and consistent. Request-scoped helpers such as ``self.context`` refer to the most recent
   event and may be stale; prefer services and ``self.app``.
+
+Live sessions across tabs
+-------------------------
+
+Session data is shared by every tab of one browser, but a tab only learns about a change the next
+time it handles an event. ``App(live_session=True)`` makes it immediate::
+
+    app = App(live_session=True)
+
+    class Cart(Component):
+        items = State(0, scope="session")   # or anything read from self.context.session
+
+When one tab changes session data, every other tab of that browser that *rendered* session data
+re-renders and receives the patches over the stream, with no click needed. Notes:
+
+* Only pages that read session data open a stream, so the cost is one connection per such tab.
+* The tab that made the change is not sent the same update twice.
+* It is off by default. Within one process this is immediate; with several workers a change only
+  reaches tabs held by the same worker (a shared pub/sub backend is future work).
+* Changes made from a plain thread (``@threaded`` handlers) reach other tabs on their next event.

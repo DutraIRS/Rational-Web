@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
 - Optional thread offload for synchronous handlers: `App(sync_handlers="thread")` and the
   `@threaded` / `@threaded(enabled=False)` decorators. The default stays `"loop"`.
 - A concurrency guide (`docs/concurrency.rst`).
+- Live sessions: `App(live_session=True)` pushes session-data changes made in one tab to the other
+  tabs of the same browser over the stream, with no click needed. Off by default.
 - Client-side navigation: `App(client_nav=True)` swaps same-origin links in place (history, title,
   focus and styles handled), and falls back to a normal load on any failure. Events `rw:navigating`
   and `rw:navigated` are fired on `document`.
