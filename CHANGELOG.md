@@ -9,7 +9,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - Static export: `python app.py --export DIR` (and `rational.export.export_site`) writes the
   app's static pages, theme CSS, mounted static directories and a `404.html` as plain HTML for
-  any static host, skipping interactive, authenticated and parameterised pages with a reason. and walkthrough covering local and remote images, multiple favicon sources,
+  any static host, skipping interactive, authenticated and parameterised pages with a reason.
+- A `media` example and walkthrough covering local and remote images, multiple favicon sources,
   internal and external links, video sources, and embedded PDF documents through `h()`.
 - Structured request logging and telemetry through `app.logging`: request IDs, request and event
   timings, slow-render warnings, and optional OpenTelemetry spans.
@@ -21,6 +22,22 @@ All notable changes to this project are documented here. The format follows
 - Examples and the tutorial project use a new layout: `app.py`, `settings.py`, `models/`,
   `services/` and `views/{styles,components,pages}`. Imports are relative inside a layer and
   absolute across layers (`from views.styles import X`).
+- Development tooling: CI enforces 88% branch coverage and lints the browser runtime with ESLint
+  (`npm ci && npm run lint:js`).
+
+### Fixed
+- Sessions are finalized (including id rotation) on handled error and failure responses.
+- Page renders, remote service calls and events for one session are serialized, so shared session
+  state no longer races across pages.
+- Replayed or stale events are rejected with HTTP 409 `stale_revision` and a reload action instead
+  of running twice.
+- The declared minimum dependency versions (FastAPI 0.110, Pydantic 2.6, Uvicorn 0.27) work; CI
+  tests them.
+- Every response, including framework assets and the API, carries baseline security headers
+  (`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`).
+- The `docs` extra installs the optional dependencies the API reference imports.
+- Documentation no longer claims runtime validation of component prop values (annotations are
+  static typing hints) and states that multi-worker deployments need sticky routing.
 
 ## [0.1.0a1] - 2026-10-22
 
