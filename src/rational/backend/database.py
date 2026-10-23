@@ -15,6 +15,7 @@ try:
     from sqlalchemy import MetaData
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.pool import NullPool
 except ImportError as exc:  # pragma: no cover
     raise ImportError("database support needs SQLAlchemy: pip install 'rational[db]'") from exc
 
@@ -25,10 +26,19 @@ class Model(DeclarativeBase):
 
 class Database:
     def __init__(
-        self, url: str, *, echo: bool = False, metadata: MetaData | None = None, **engine_options: Any
+        self,
+        url: str,
+        *,
+        echo: bool = False,
+        metadata: MetaData | None = None,
+        serverless: bool = False,
+        **engine_options: Any,
     ) -> None:
         self.url = url
         self.metadata = metadata if metadata is not None else Model.metadata
+        if serverless:
+            # No pooled connections held between invocations; each use opens and closes its own.
+            engine_options.setdefault("poolclass", NullPool)
         self.engine = create_async_engine(url, echo=echo, **engine_options)
         self.sessionmaker = async_sessionmaker(self.engine, expire_on_commit=False)
 

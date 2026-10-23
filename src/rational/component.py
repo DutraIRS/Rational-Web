@@ -54,6 +54,7 @@ class Component:
     """
 
     _rw_props: ClassVar[dict[str, Any]] = {}
+    resumable: ClassVar[bool] = True  # False: this component's state is not saved in page snapshots
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

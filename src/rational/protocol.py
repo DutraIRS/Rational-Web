@@ -59,7 +59,7 @@ async def handle_event(app: App, request: Request) -> Response:
         return _error(400, "bad_request", "Malformed event")
     if event.v != PROTOCOL_VERSION:
         return _error(410, "version", "The page is out of date")
-    runtime = app.pages.get(event.page)
+    runtime = await app.page_for(request, event.page)
     if runtime is None:
         return _error(410, "expired", "This page expired")
     session = await app.load_session(request)
@@ -153,6 +153,8 @@ async def handle_event(app: App, request: Request) -> Response:
             payload["error"] = error
         if app.commit_session(ctx):
             payload["csrf"] = session.csrf
+        if app.resume is not None:
+            await app.resume.save(runtime)
         response = JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
         app.finish(request, response, ctx)
         return response
@@ -160,7 +162,7 @@ async def handle_event(app: App, request: Request) -> Response:
 
 async def handle_stream(app: App, request: Request) -> Response:
     """``GET /_rational/stream?page=ID``: server-sent events carrying patches pushed by background tasks."""
-    runtime = app.pages.get(request.query_params.get("page"))
+    runtime = await app.page_for(request, request.query_params.get("page"))
     if runtime is None:
         return _error(410, "expired", "This page expired")
     session = await app.load_session(request)

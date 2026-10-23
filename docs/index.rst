@@ -80,6 +80,7 @@ Not sure where *you* should start?
    services
    projects
    running
+   serverless
    concurrency
    i18n
    security

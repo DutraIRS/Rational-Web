@@ -57,6 +57,9 @@ class PageRoute:
     def url(self, **params: Any) -> str:
         return PATH_PARAM.sub(lambda m: str(params[m.group(1)]), self.path)
 
+    def props_from(self, params: dict[str, Any]) -> dict[str, Any]:
+        return {name: a.validate_python(params[name]) for name, a in self.adapters.items()}
+
     async def __call__(self, request: Request) -> Response:
         app = self.app
         app.housekeeping()
@@ -83,6 +86,7 @@ class PageRoute:
 
         page = self.page(**props)
         runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
+        runtime.origin = (self.path, {k: str(v) for k, v in request.path_params.items()})
         try:
             with app.logging.span(
                 "rational.page.render",
@@ -127,6 +131,8 @@ class PageRoute:
             runtime.sync_session_revision()
             app.pages.put(runtime.id, runtime)
             runtime.served = True
+            if app.resume is not None:
+                await app.resume.save(runtime)
             manifest = {
                 "v": PROTOCOL_VERSION,
                 "page": runtime.id,

@@ -49,8 +49,9 @@ when a proxy serves the app under a sub-path.
 
 .. important::
 
-   Page views (component state) live in process memory. Run one worker per container,
-   or use sticky sessions when you run several (``--workers N`` prints a reminder).
+   Page views (component state) live in process memory unless you enable resumable pages
+   (below). Otherwise run one worker per container, or use sticky sessions when you run several
+   (``--workers N`` prints a reminder).
 
 Sessions across workers and restarts
 ------------------------------------
@@ -68,10 +69,38 @@ the others. What is stored is JSON: the CSRF token and ``session.data`` includin
 so keep session values JSON-compatible (or pass ``serialize=`` and ``deserialize=``). It is never
 pickled, because a shared store is a trust boundary. Match ``ttl=`` to ``App(session_ttl=...)``.
 
-Limits: concurrent writes from different workers are last-write-wins, and
-``State(scope="session")`` values and open pages are still worker-local, so interactive pages
-still need sticky routing. Any other backend (a database, say) only has to implement
+Limits: concurrent writes from different workers are last-write-wins. JSON-compatible
+``State(scope="session")`` values travel with the session; anything else stays worker-local. Open
+pages are worker-local too unless you enable resumable pages (next section). Any other backend (a
+database, say) only has to implement
 :class:`~rational.stores.SessionDriver`: four async methods, ``get``, ``set``, ``touch`` and ``delete``.
+
+Resumable pages
+---------------
+
+A page view normally lives in the memory of one process, so a restart, an eviction or a different
+worker answering means "This page expired" and a reload. Give the app a snapshot driver and the page
+is rebuilt on demand instead::
+
+    from rational import App, PersistentSessionStore, RedisSessionDriver
+
+    driver = RedisSessionDriver(url="redis://localhost:6379/0")
+    app = App(session_store=PersistentSessionStore(driver), page_snapshots=driver)
+
+After every event (and after every pushed batch) the JSON-compatible part of the page's state is
+saved. When an event or stream arrives for an unknown page id, the server finds the route, renders it
+again, runs ``mount()`` again and restores the saved state before each component's first render, so
+the handler ids in the browser still match. This means:
+
+* ``component`` and ``page`` scope values that survive a JSON round trip (numbers, strings, booleans,
+  ``None``, lists and dicts of those) are restored; other values fall back to their defaults.
+* ``mount()`` and background tasks run again, so keep them idempotent. ``Suspense`` content is loaded again.
+* Only the path parameters of the route are restored, not the query string.
+* Rebuilding checks that the browser's session owns the snapshot.
+* Each event pays one extra write to the driver. A WebSocket or SSE connection that drops is also
+  resumed by the next connection, but a push stream still talks to one process, so live pushes made by
+  a different worker than the one holding the stream are not forwarded. There is no cross-worker pub/sub.
+  Use sticky routing if you rely on background-task pushes with several workers.
 
 Client-side navigation
 ----------------------

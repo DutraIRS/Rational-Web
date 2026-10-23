@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 from ..component import Component
 from ..rendering import h
@@ -41,6 +41,7 @@ class Suspense(Component):
     load: Callable[[], Any]
     fallback: Any = None
     error: Any = None
+    resumable: ClassVar[bool] = False  # its content is not JSON; a resumed page loads it again
 
     phase = State("loading")
     content = State(None)

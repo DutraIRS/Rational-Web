@@ -71,6 +71,8 @@ class PageRuntime:
         self.deps: dict[Cell, set[str]] = {}
         self.component_deps: dict[str, set[Cell]] = {}
         self.page_state: dict[str, Any] = {}
+        self.origin: tuple[str, dict[str, str]] | None = None  # route path and its params, for snapshots
+        self.restore: dict[str, dict[str, Any]] = {}  # saved component state by path, applied while resuming
         self.dirty: set[str] = set()
         self.actions: list[dict[str, Any]] = []
         self.revision = 0
@@ -180,6 +182,9 @@ class PageRuntime:
         self.components[cid] = comp
         self.paths[path] = cid
         self.parent[cid] = parent
+        saved = self.restore.get(path)
+        if saved:
+            comp._rw_state.update(saved)
         result = comp.mount()
         if inspect.isawaitable(result):
             await result
@@ -323,6 +328,9 @@ class PageRuntime:
                         "actions": self.take_actions(),
                     }
                 )
+                resumer = getattr(self.context.app, "resume", None)
+                if resumer is not None:
+                    await resumer.save(self)
         except Exception:
             log.exception("error while pushing page updates")
 

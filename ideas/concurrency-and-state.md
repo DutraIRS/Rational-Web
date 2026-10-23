@@ -8,9 +8,11 @@ order. Current behaviour is described in `docs/running.rst`, `src/rational/proto
 
 Implemented: handler timeouts and `@threaded`, background tasks, SSE push and optional WebSocket push,
 client navigation, live cross-tab sessions, API-only mode, fine-grained diffs, Suspense, persistent
-sessions. Still open: optimistic updates (C3), resumable page state (D5), ASGI adapters (D4),
-multi-worker pub/sub for push and live sessions (push is per process today). D2 (stateless sessions)
-is largely covered by `PersistentSessionStore`. The "Where we are" text below predates this work.
+sessions, optimistic updates (C3), resumable page state via server-side snapshots (D5, the state-token
+variant was not built) and a serverless/ASGI guide (D4, documentation only, not tested on the
+platforms). Still open: multi-worker pub/sub for push and live sessions (push is per process today).
+D2 (stateless sessions) is largely covered by `PersistentSessionStore`. The "Where we are" text below
+predates this work.
 
 ## Where we are
 

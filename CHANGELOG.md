@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Resumable pages: `App(page_snapshots=driver)` rebuilds a page the server no longer holds from a saved
+  JSON snapshot (eviction, restart, another worker). `PersistentSessionStore` now carries JSON-compatible
+  session-scope state. `Database(serverless=True)` uses `NullPool`. New "Serverless and ASGI hosts" page.
 - `js.optimistic(*ops)`: apply client operations immediately, with rollback when the event fails.
 - `App(websocket=True)`: server push over a same-origin, session-checked WebSocket with SSE fallback;
   new `websockets` extra.

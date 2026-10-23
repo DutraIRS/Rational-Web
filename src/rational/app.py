@@ -30,6 +30,7 @@ from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, error_page
 from .protocol import EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
+from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
 from .session import Session, SessionBackend, SessionStore, TTLStore
@@ -39,6 +40,7 @@ from .styling.theme import Theme, ThemeMode, get_theme
 
 if TYPE_CHECKING:
     from .backend.database import Database
+    from .stores import SessionDriver
 
 P = TypeVar("P", bound=type[Page])
 T = TypeVar("T", bound=type)
@@ -90,6 +92,8 @@ class App:
         cors_origins: Sequence[str] = (),
         fine_patches: bool = True,
         websocket: bool = False,
+        page_snapshots: SessionDriver | None = None,
+        page_snapshot_ttl: int = 60 * 60 * 24,
         i18n: I18n | None = None,
         adapter: Adapter | None = None,
         stylesheets: Sequence[str | Asset] = (),
@@ -136,6 +140,9 @@ class App:
         self.sessions: SessionBackend = session_store or SessionStore(ttl=session_ttl)
         self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
         self.routes: dict[type[Page], PageRoute] = {}
+        self.resume: PageResumer | None = (
+            PageResumer(self, page_snapshots, page_snapshot_ttl) if page_snapshots is not None else None
+        )
         self.services: list[type] = []
         self.authenticator: Callable[[Context], Any] | None = None
         self._startup: list[Callable[[], Any]] = []
@@ -363,6 +370,13 @@ class App:
 
     async def _stream(self, request: Request) -> Response:
         return await handle_stream(self, request)
+
+    async def page_for(self, request: Request, page_id: str | None) -> PageRuntime | None:
+        """The live runtime for ``page_id``, resumed from a snapshot when the app keeps them."""
+        live = self.pages.get(page_id)
+        if live is not None or self.resume is None:
+            return live
+        return await self.resume.resume(request, page_id)
 
     async def _ws(self, websocket: WebSocket) -> None:
         await handle_websocket(self, websocket)

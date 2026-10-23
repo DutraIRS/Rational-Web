@@ -25,6 +25,14 @@ Serializer = Callable[[dict[str, Any]], bytes]
 Deserializer = Callable[[bytes], dict[str, Any]]
 
 
+def json_plain(value: Any) -> bool:
+    """True if ``value`` survives a JSON round trip unchanged."""
+    try:
+        return bool(json.loads(json.dumps(value)) == value)
+    except (TypeError, ValueError):
+        return False
+
+
 def json_serialize(payload: dict[str, Any]) -> bytes:
     try:
         return json.dumps(payload, separators=(",", ":")).encode()
@@ -179,17 +187,20 @@ class PersistentSessionStore:
         try:
             payload = self.deserialize(raw)
             version, csrf, data = int(payload["n"]), str(payload["csrf"]), dict(payload["data"])
+            state = dict(payload.get("state") or {})
         except Exception:
             log.warning("discarding an unreadable session record", exc_info=True)
             return None
         if cached is not None:
             if cached.version != version:
                 cached.data, cached.csrf, cached.version = data, csrf, version
+                cached.state.update(state)  # values that are not JSON stay local
                 cached.bump()  # tell open pages of this worker that the data changed under them
                 cached.saved_revision = cached.revision
             return cached
         session = Session(sid)
         session.data, session.csrf, session.version = data, csrf, version
+        session.state.update(state)
         session.saved_revision = session.revision
         self._local.put(sid, session)
         return session
@@ -201,7 +212,12 @@ class PersistentSessionStore:
         key = self._key(session.id)
         if session.saved_revision != session.revision:
             session.version += 1
-            payload = {"n": session.version, "csrf": session.csrf, "data": session.data}
+            payload = {
+                "n": session.version,
+                "csrf": session.csrf,
+                "data": session.data,
+                "state": {k: v for k, v in session.state.items() if json_plain(v)},
+            }
             await self.driver.set(key, self.serialize(payload), self.ttl)
             session.saved_revision = session.revision
             session.touched_at = time.monotonic()
