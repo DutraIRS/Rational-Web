@@ -83,6 +83,15 @@ Errors
 .. automodule:: rational.errors
    :members:
 
+Concurrency
+-----------
+
+.. autofunction:: rational.timeout
+
+.. autofunction:: rational.threaded
+
+.. autoclass:: rational.HandlerTimeout
+
 Rendering
 ---------
 

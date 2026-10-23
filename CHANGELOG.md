@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Handler time limits: `App(handler_timeout=seconds)` and the `@timeout(seconds | None)` decorator.
+  A handler or remote method that overruns answers `504` with code `timeout`.
+- Optional thread offload for synchronous handlers: `App(sync_handlers="thread")` and the
+  `@threaded` / `@threaded(enabled=False)` decorators. The default stays `"loop"`.
+- A concurrency guide (`docs/concurrency.rst`).
+
 ## [0.1.0a2] - 2026-10-22
 
 ### Added
