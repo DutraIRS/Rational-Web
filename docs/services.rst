@@ -97,6 +97,27 @@ and hands out sessions.
        ...
 
 ``rational.backend.Model`` is an optional declarative base; any base works.
-``await app.db.create_all(Base)`` is a development convenience — use Alembic migrations
-in production. Prefer explicit loading (``selectinload``) to avoid N+1 queries and lazy
+``await app.db.create_all(Base)`` is a development convenience — use migrations
+in production (below). Prefer explicit loading (``selectinload``) to avoid N+1 queries and lazy
 loads outside a session.
+
+Migrations
+----------
+
+``pip install "rational[migrations]"`` adds Alembic, wired to your app so there is no ``alembic.ini``.
+Pass your base's metadata (``Database(url, metadata=Base.metadata)``; it defaults to
+``rational.backend.Model.metadata``), then:
+
+.. code-block:: console
+
+   python -m rational db init app.py                                  # creates ./migrations
+   python -m rational db revision app.py -m "add users" --autogenerate
+   python -m rational db upgrade app.py                               # to head, or a revision
+   python -m rational db downgrade app.py -1
+   python -m rational db current app.py
+   python -m rational db history app.py
+
+Review the generated revision before applying it. Migrations run on their own short-lived engine, and
+SQLite uses batch mode so column changes work. To migrate at startup, call
+``await app.db.upgrade()`` from an ``on_startup`` hook (use a single process or a lock when several
+workers start at once).

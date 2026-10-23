@@ -7,8 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Migrations: `rational db init|revision|upgrade|downgrade|current|history` drives Alembic from the
+  app's `Database` (no `alembic.ini`), plus `await db.upgrade()` and `Database(metadata=...)`.
+  Install with `rational[migrations]`.
 - Internationalization: `App(i18n=I18n(...))`, `self.t()` / `ctx.t()` with params and plurals, locale
-  negotiation (cookie, `Accept-Language`), `<html lang>`, `js.set_locale()`.: after an event the server diffs each re-rendered component against its
+  negotiation (cookie, `Accept-Language`), `<html lang>`, `js.set_locale()`.
+- Fine-grained patches: after an event the server diffs each re-rendered component against its
   previous tree and sends text/attribute edits (or a morph of the smallest changed subtree) instead
   of the whole component, so client-side `js.*` changes survive unrelated updates. Turn off with
   `App(fine_patches=False)`.

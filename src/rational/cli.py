@@ -175,10 +175,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     if argv and argv[0] == "new":
         _new(argv[1:])
         return
+    if argv and argv[0] == "db":
+        _db(argv[1:])
+        return
     if not argv or argv[0].startswith("-"):
         raise SystemExit(
             "usage: python -m rational <app.py | module:attr> [--dev | --prod] [options]\n"
-            "       python -m rational new <name>"
+            "       python -m rational new <name>\n"
+            "       python -m rational db <init|revision|upgrade|downgrade|current|history> ..."
         )
     args = build_parser().parse_known_args(argv[1:])[0]
     mode = resolve_mode(args.mode)
@@ -192,6 +196,44 @@ def main(argv: Sequence[str] | None = None) -> None:
         _serve_broken(argv, args)
         return
     serve(app, argv[1:], target=target)
+
+
+def _db(argv: Sequence[str]) -> None:
+    parser = argparse.ArgumentParser(prog="rational db", description="Database migrations (Alembic).")
+    parser.add_argument("action", choices=["init", "revision", "upgrade", "downgrade", "current", "history"])
+    parser.add_argument("target", nargs="?", default="app.py", help="app file or module:attr (default: app.py)")
+    parser.add_argument(
+        "revision", nargs="?", help="upgrade: revision (default head); downgrade: revision (default -1)"
+    )
+    parser.add_argument("-m", "--message", help="revision: message")
+    parser.add_argument("--autogenerate", action="store_true", help="revision: diff the models against the database")
+    parser.add_argument("--directory", default="migrations", help="migrations folder (default: migrations)")
+    parser.add_argument("--app-dir", default=None)
+    args = parser.parse_args(list(argv))
+    try:
+        from .backend import migrations
+
+        if args.action == "init":
+            print(f"Created {migrations.init(args.directory)}/")
+            return
+        app, _target = load_target(args.target, args.app_dir)
+        if app.db is None:
+            raise SystemExit("rational db: the app has no database; pass App(database=Database(...))")
+        db = app.db
+        if args.action == "revision":
+            if not args.message:
+                raise SystemExit("rational db revision: -m MESSAGE is required")
+            migrations.revision(db, args.directory, args.message, args.autogenerate)
+        elif args.action == "upgrade":
+            migrations.upgrade(db, args.directory, args.revision or "head")
+        elif args.action == "downgrade":
+            migrations.downgrade(db, args.directory, args.revision or "-1")
+        elif args.action == "current":
+            migrations.current(db, args.directory)
+        else:
+            migrations.history(db, args.directory)
+    except (TargetError, migrations.MigrationError) as exc:
+        raise SystemExit(f"rational db: {exc}") from None
 
 
 def _new(argv: Sequence[str]) -> None:
