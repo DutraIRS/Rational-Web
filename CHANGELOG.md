@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `rational new NAME` scaffolds a small runnable project (app, page, test, README, requirements).
 - Persistent sessions: `App(session_store=PersistentSessionStore(driver))` keeps the CSRF token and
   `session.data` (JSON, never pickle) outside the process, through a four-method async
   `SessionDriver`. Ships `RedisSessionDriver` (`pip install "rational[redis]"`) and a memory driver.

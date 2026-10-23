@@ -11,6 +11,9 @@ Rational Web needs Python 3.11 or newer.
    $ python -m pip install rational            # core
    $ python -m pip install "rational[db]"      # + SQLAlchemy / aiosqlite
 
+Want a ready-made project layout instead of a single file? ``rational new mysite`` creates
+``mysite/`` with an app, a page, a test and a README, and ``cd mysite && python app.py --dev`` runs it.
+
 Your first app
 --------------
 

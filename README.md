@@ -206,7 +206,8 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
       several workers still need sticky routing
 
 **0.3: productivity**
-- [ ] `rational new` project scaffolding and an Alembic migration workflow
+- [x] `rational new` project scaffolding
+- [ ] Alembic migration workflow
 - [x] Structured logging and request telemetry (`app.logging`): request IDs, event timing,
       slow-render tracing, standard-library logs + optional OpenTelemetry spans
 - [ ] Streaming SSR and loading states

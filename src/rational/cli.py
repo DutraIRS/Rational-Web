@@ -14,6 +14,8 @@ Windows): the app runs in a child process that restarts whenever a ``*.py`` file
 ``--export DIR`` does not serve at all: it writes the app's static pages to ``DIR`` as plain
 HTML (see :mod:`rational.export`).
 
+``rational new NAME`` writes a small runnable project (see :mod:`rational.scaffold`).
+
 Page views live in process memory, so ``--workers`` > 1 needs sticky sessions.
 """
 
@@ -168,10 +170,16 @@ def _serve_prod(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """``python -m rational path/to/app.py|module:attr [--dev|--prod] [options]``"""
+    """``python -m rational path/to/app.py|module:attr [--dev|--prod] [options]`` or ``rational new NAME``"""
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "new":
+        _new(argv[1:])
+        return
     if not argv or argv[0].startswith("-"):
-        raise SystemExit("usage: python -m rational <app.py | module:attr> [--dev | --prod] [options]")
+        raise SystemExit(
+            "usage: python -m rational <app.py | module:attr> [--dev | --prod] [options]\n"
+            "       python -m rational new <name>"
+        )
     args = build_parser().parse_known_args(argv[1:])[0]
     mode = resolve_mode(args.mode)
     try:
@@ -184,6 +192,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         _serve_broken(argv, args)
         return
     serve(app, argv[1:], target=target)
+
+
+def _new(argv: Sequence[str]) -> None:
+    from .scaffold import ScaffoldError, scaffold
+
+    parser = argparse.ArgumentParser(prog="rational new", description="Create a new Rational Web project.")
+    parser.add_argument("name", help="project name; also the directory to create")
+    args = parser.parse_args(list(argv))
+    try:
+        scaffold(args.name)
+    except ScaffoldError as exc:
+        raise SystemExit(f"rational new: {exc}") from None
+    print(f"Created {args.name}/\n\n  cd {args.name}\n  pip install -r requirements.txt\n  python app.py --dev")
 
 
 def _serve_broken(argv: Sequence[str], args: argparse.Namespace) -> None:

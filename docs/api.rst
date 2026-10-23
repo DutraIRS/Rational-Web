@@ -114,6 +114,9 @@ Running
 .. automodule:: rational.cli
    :members: serve, main
 
+.. automodule:: rational.scaffold
+   :members: scaffold, ScaffoldError
+
 .. automodule:: rational.export
    :members: export_site, ExportReport
 
