@@ -96,6 +96,9 @@ Running
 .. automodule:: rational.cli
    :members: serve, main
 
+.. automodule:: rational.export
+   :members: export_site, ExportReport
+
 Testing
 -------
 

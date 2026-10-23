@@ -52,6 +52,22 @@ when a proxy serves the app under a sub-path.
    Page views (component state) live in process memory. Run one worker per container,
    or use sticky sessions when you run several (``--workers N`` prints a reminder).
 
+Static export
+-------------
+
+A site made of static pages does not need a running server. Export it as plain HTML files
+and host them anywhere (GitHub Pages, Netlify, S3, a CDN)::
+
+   $ python app.py --export site/
+   $ python app.py --export site/ --root-path /my-repo     # served under a sub-path
+
+This writes ``site/index.html``, ``site/<path>/index.html``, ``site/_rational/theme.css``,
+a ``404.html`` and a copy of every directory mounted with ``app.static``. Only pages that
+work without a server are exported: those with no path parameters, no ``auth="required"``
+and no interactivity (any page that loads the browser runtime, such as one with event handlers).
+Everything else is listed as skipped with the reason, and the command exits non-zero if nothing could
+be exported. The same export is available from code as :func:`rational.export.export_site`.
+
 Request logging and tracing
 ---------------------------
 

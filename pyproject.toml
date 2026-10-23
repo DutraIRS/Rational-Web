@@ -36,6 +36,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/DutraIRS/Rational-Web"
+Documentation = "https://rational-web.readthedocs.io"
 Repository = "https://github.com/DutraIRS/Rational-Web"
 Issues = "https://github.com/DutraIRS/Rational-Web/issues"
 Changelog = "https://github.com/DutraIRS/Rational-Web/blob/main/CHANGELOG.md"

@@ -68,7 +68,29 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--no-reload", action="store_true", help="dev only: disable auto-reload")
     parser.add_argument("--log-level", default=None, help="uvicorn log level (default: info)")
     parser.add_argument("--app-dir", default=None, help="directory to import the app from (python -m rational)")
+    parser.add_argument(
+        "--export",
+        metavar="DIR",
+        default=None,
+        help="write the app's static pages to DIR as plain HTML instead of serving (use --root-path for sub-paths)",
+    )
     return parser
+
+
+def export(app: App, directory: str, root_path: str = "") -> int:
+    """Run a static export and print what was written and skipped. Returns the exit code."""
+    import asyncio
+
+    from .export import export_site
+
+    os.environ.pop(DEV_ENV, None)
+    report = asyncio.run(export_site(app, directory, base_path=root_path))
+    for page in report.pages:
+        print(f"  exported  {page}")
+    for page, reason in report.skipped:
+        print(f"  skipped   {page}  ({reason})")
+    print(f"\n{len(report.pages)} page(s) written to {directory}")
+    return 0 if report.pages else 1
 
 
 def resolve_mode(requested: str | None) -> str:
@@ -82,6 +104,8 @@ def serve(app: App, argv: Sequence[str] | None = None, *, target: Target | None 
     import uvicorn
 
     args = build_parser().parse_args(sys.argv[1:] if argv is None else list(argv))
+    if args.export:
+        raise SystemExit(export(app, args.export, args.root_path))
     mode = resolve_mode(overrides.pop("mode", None) or args.mode)
     target = target or _main_target(app)
     port = overrides.pop("port", None) or args.port or int(os.environ.get("PORT", 8000))

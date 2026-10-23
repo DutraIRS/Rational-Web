@@ -109,7 +109,9 @@ $ python app.py --dev
 
 ## Documentation
 
-The documentation is a Sphinx site in [`docs/`](docs/):
+The documentation is a Sphinx site in [`docs/`](docs/), published online at
+[rational-web.readthedocs.io](https://rational-web.readthedocs.io) and mirrored on
+[GitHub Pages](https://dutrairs.github.io/Rational-Web/):
 
 - **Tutorial:** build a guestbook step by step, from one file to a tested, deployed project. Every
   step is a runnable file, executed by the test suite.
@@ -125,9 +127,8 @@ $ pip install -e ".[docs]"
 $ sphinx-autobuild docs docs/_build/html      # then open http://127.0.0.1:8000
 ```
 
-Publishing is ready on two hosts. The `Docs` GitHub Actions workflow builds the site with warnings
-as errors and deploys it to GitHub Pages (enable *Settings → Pages → Source: GitHub Actions* once),
-and `.readthedocs.yaml` configures Read the Docs.
+Both hosts build from this repository. The `Docs` GitHub Actions workflow builds the site with
+warnings as errors and deploys it to GitHub Pages, and `.readthedocs.yaml` configures Read the Docs.
 
 ## Benchmarks
 

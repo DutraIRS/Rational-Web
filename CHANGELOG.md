@@ -7,7 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- A `media` example and walkthrough covering local and remote images, multiple favicon sources,
+- Static export: `python app.py --export DIR` (and `rational.export.export_site`) writes the
+  app's static pages, theme CSS, mounted static directories and a `404.html` as plain HTML for
+  any static host, skipping interactive, authenticated and parameterised pages with a reason. and walkthrough covering local and remote images, multiple favicon sources,
   internal and external links, video sources, and embedded PDF documents through `h()`.
 - Structured request logging and telemetry through `app.logging`: request IDs, request and event
   timings, slow-render warnings, and optional OpenTelemetry spans.
