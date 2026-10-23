@@ -343,6 +343,69 @@
     return true;
   }
 
+  // ---- widget keyboard support (tabs, menus) ---------------------------------------------------
+  function closeMenus(except) {
+    document.querySelectorAll("[data-rw-menu]").forEach((menu) => {
+      if (menu === except) return;
+      const list = menu.querySelector("[role=menu]");
+      if (list && !list.hidden) {
+        list.hidden = true;
+        menu.querySelector("[aria-haspopup=menu]")?.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+
+  function openMenu(menu, focusItem) {
+    closeMenus(menu);
+    const list = menu.querySelector("[role=menu]");
+    list.hidden = false;
+    menu.querySelector("[aria-haspopup=menu]").setAttribute("aria-expanded", "true");
+    const items = list.querySelectorAll("[role=menuitem]");
+    if (focusItem && items.length) items[focusItem === "last" ? items.length - 1 : 0].focus();
+  }
+
+  document.addEventListener("click", (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    const menu = target ? target.closest("[data-rw-menu]") : null;
+    if (menu && target.closest("[aria-haspopup=menu]")) {
+      if (menu.querySelector("[role=menu]").hidden) openMenu(menu, "first"); else closeMenus();
+    } else {
+      closeMenus();  // an item was chosen, or the click was elsewhere
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    const tab = target.closest("[role=tab]");
+    if (tab) {
+      const tabs = Array.from(tab.closest("[role=tablist]").querySelectorAll("[role=tab]"));
+      const i = tabs.indexOf(tab);
+      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      const to = tabs[(next + tabs.length) % tabs.length];
+      to.focus();
+      to.click();
+      return;
+    }
+    const menu = target.closest("[data-rw-menu]");
+    if (!menu) return;
+    const trigger = menu.querySelector("[aria-haspopup=menu]");
+    const items = Array.from(menu.querySelectorAll("[role=menuitem]"));
+    if (e.key === "Escape") {
+      if (!menu.querySelector("[role=menu]").hidden) { e.preventDefault(); closeMenus(); trigger.focus(); }
+    } else if (target === trigger && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      openMenu(menu, e.key === "ArrowUp" ? "last" : "first");
+    } else if (items.includes(target)) {
+      const i = items.indexOf(target);
+      const next = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: items.length - 1 }[e.key];
+      if (next !== undefined) { e.preventDefault(); items[(next + items.length) % items.length].focus(); }
+      else if (e.key === "Tab") closeMenus();
+    }
+  });
+
   // ---- client-side navigation (App(client_nav=True)) ---------------------------------------
   function go(url) {
     if (M.nav) navigate(url, true); else location.assign(url);

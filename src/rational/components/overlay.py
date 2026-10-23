@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from ..events import js
-from ..rendering.builder import h
+from ..rendering.builder import EventValue, h
 from ..rendering.nodes import Node
 from ..styling.style import Style, merge
 from .basic import Button, Heading
@@ -140,11 +140,14 @@ def Tabs(  # noqa: N802
                 role="tab",
                 id=f"{id}-tab-{i}",
                 aria_selected="true" if i == selected else "false",
+                tabindex=0 if i == selected else -1,
                 aria_controls=panel_id,
                 style=TAB,
                 on_click=[
                     js.set_attr("aria-selected", "false", f"#{id} [role=tab]"),
+                    js.set_attr("tabindex", "-1", f"#{id} [role=tab]"),
                     js.set_attr("aria-selected", "true"),
+                    js.set_attr("tabindex", "0"),
                     js.hide(f"#{id} [role=tabpanel]"),
                     js.show(f"#{panel_id}"),
                 ],
@@ -222,6 +225,98 @@ def Toast(  # noqa: N802
         role=role,
         data_toast=True,
         style=merge(TOAST, TOAST_TONES[tone], style),
+        **attrs,
+    )
+
+
+MENU_LIST = Style(
+    position="absolute",
+    top="100%",
+    left=0,
+    z_index=100,
+    min_width="10rem",
+    margin_top="xs",
+    padding="xs",
+    display="flex",
+    direction="column",
+    background="surface",
+    color="on_surface",
+    border=True,
+    border_radius="md",
+    shadow="0 8px 24px rgba(0,0,0,.2)",
+)
+MENU_ITEM = Style(
+    display="block",
+    background="transparent",
+    color="on_surface",
+    border="0",
+    border_radius="sm",
+    padding_x="md",
+    padding_y="sm",
+    text_align="left",
+    text_decoration="none",
+    cursor="pointer",
+    width="100%",
+    hover=Style(background="surface_alt"),
+    focus=Style(background="surface_alt"),
+)
+
+
+def MenuItem(  # noqa: N802
+    *content: Any,
+    on_click: EventValue = None,
+    href: str | None = None,
+    style: Style | None = None,
+    key: str | int | None = None,
+    **attrs: Any,
+) -> Node:
+    """An entry of a menu: a button, or a link when ``href`` is given."""
+    if href is not None:
+        return h(
+            "a", *content, href=href, role="menuitem", tabindex=-1, key=key, style=merge(MENU_ITEM, style), **attrs
+        )
+    return h(
+        "button",
+        *content,
+        type="button",
+        role="menuitem",
+        tabindex=-1,
+        on_click=on_click,
+        key=key,
+        style=merge(MENU_ITEM, style),
+        **attrs,
+    )
+
+
+def Menu(  # noqa: N802
+    label: Any,
+    *items: Any,
+    id: str,  # noqa: A002
+    variant: Literal["primary", "secondary", "outline", "ghost", "danger"] = "outline",
+    style: Style | None = None,
+    **attrs: Any,
+) -> Node:
+    """A drop-down menu of menu items, opened and closed in the browser.
+
+    Keyboard: Enter, Space or the arrow keys open it; arrows, Home and End move; Escape closes
+    and returns focus to the button; Tab or an outside click closes it.
+    """
+    _check_id(id)
+    list_id = f"{id}-list"
+    return h(
+        "div",
+        Button(
+            label,
+            variant=variant,
+            id=f"{id}-button",
+            aria_haspopup="menu",
+            aria_expanded="false",
+            aria_controls=list_id,
+        ),
+        h("div", *items, role="menu", id=list_id, aria_labelledby=f"{id}-button", hidden=True, style=MENU_LIST),
+        id=id,
+        data_rw_menu=True,
+        style=merge(Style(position="relative", display="inline-block"), style),
         **attrs,
     )
 

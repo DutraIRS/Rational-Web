@@ -1,6 +1,6 @@
 import pytest
 
-from rational import App, Button, Modal, Page, Table, Tabs, Text, Toast, Toasts, js
+from rational import App, Button, Menu, MenuItem, Modal, Page, Table, Tabs, Text, Toast, Toasts, js
 from rational.testing import TestClient
 
 
@@ -33,6 +33,18 @@ def test_table_renders_semantic_markup_and_empty_state():
     html = html_of(Table(["Name", "Age"], [["Ada", 36]], caption="People"))
     assert "<th" in html and 'scope="col"' in html and "Ada" in html and "People" in html
     assert "Nothing here" in html_of(Table(["A"], [], empty="Nothing here"))
+
+
+def test_menu_is_a_labelled_hidden_menu_and_loads_the_runtime():
+    html = html_of(Menu("Options", MenuItem("Edit"), MenuItem("Docs", href="/docs"), id="m"))
+    assert 'aria-haspopup="menu"' in html and 'aria-expanded="false"' in html
+    assert html.count('role="menuitem"') == 2 and 'role="menu"' in html and "data-rw-menu" in html
+    assert "rw-manifest" in html  # a menu-only page still needs the runtime for its keyboard support
+
+
+def test_tabs_use_a_roving_tabindex():
+    html = html_of(Tabs([("One", Text("a")), ("Two", Text("b"))], id="t"))
+    assert html.count('tabindex="0"') == 1 and html.count('tabindex="-1"') == 1
 
 
 def test_toast_roles_and_region():

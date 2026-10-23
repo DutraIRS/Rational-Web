@@ -187,6 +187,8 @@ class PageRuntime:
             classes.append(self.sheet.use(node.style))
         if classes:
             attrs.insert(0, ("class", " ".join(classes)))
+        if any(n == "data-rw-menu" for n, _ in attrs):
+            self.interactive = True  # the runtime script provides the menu's keyboard support
         for event, handler in node.events:
             attrs.append((f"data-rw-on-{event}", self._register(frame, handler, event)))
         for event, ops in node.client:

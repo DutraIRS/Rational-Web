@@ -136,6 +136,12 @@ elements (``<dialog>``, ``role=tab``)::
 
    Toasts(Toast("Saved", tone="success"))
 
+   Menu("Actions", MenuItem("Rename", on_click=self.rename), MenuItem("Docs", href="/docs"), id="actions")
+
+``Menu`` and ``Tabs`` follow the WAI-ARIA patterns. Tabs use a roving ``tabindex`` and
+Left/Right/Home/End. A menu opens with Enter, Space or the arrow keys, moves with
+arrows/Home/End, and closes with Escape (focus returns to its button), Tab or an outside click.
+
 ``Modal`` gets focus trapping, a backdrop and Escape from the browser. ``Tabs`` renders every
 panel and shows the selected one; a server re-render that changes the tabs resets the selection.
 Toasts are dismissed in the browser; render them from state to show one on demand. ``id`` values

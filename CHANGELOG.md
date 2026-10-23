@@ -7,8 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Components `Modal` (native `<dialog>`), `Tabs`, `Table`, `Toast` and `Toasts`. Modal, tabs and
-  toast dismissal run in the browser with no round trip.
+- Components `Modal` (native `<dialog>`), `Tabs`, `Table`, `Toast`, `Toasts`, `Menu` and `MenuItem`.
+  Modal, tabs, menus and toast dismissal run in the browser with no round trip; tabs and menus
+  have arrow-key navigation.
 - More browser-local `js.*` operations: `show`, `hide`, `toggle`, `remove`, `set_text`, `set_value`,
   `copy`, `scroll_to`, `open_dialog`, `close_dialog`. Browser tests now cover them in real Chromium.
 - Handler time limits: `App(handler_timeout=seconds)` and the `@timeout(seconds | None)` decorator.

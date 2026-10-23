@@ -19,11 +19,13 @@ from .layout import (
     Spacer,
     Stack,
 )
-from .overlay import Modal, Table, Tabs, Toast, Toasts
+from .overlay import Menu, MenuItem, Modal, Table, Tabs, Toast, Toasts
 
 __all__ = [
     "Avatar",
     "Badge",
+    "Menu",
+    "MenuItem",
     "Modal",
     "Table",
     "Tabs",

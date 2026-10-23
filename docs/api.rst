@@ -36,7 +36,7 @@ Primitives
    :members: Form, Input, Textarea, Select, Checkbox
 
 .. automodule:: rational.components.overlay
-   :members: Modal, Tabs, Table, Toast, Toasts
+   :members: Modal, Tabs, Table, Toast, Toasts, Menu, MenuItem
 
 Events
 ------
