@@ -218,7 +218,9 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [ ] Browser matrix in CI (Chromium, Firefox, WebKit) and load tests
 - [ ] Independent security review
 
-Have an idea? Open an issue. The roadmap is a conversation.
+Have an idea? Open an issue. The roadmap is a conversation. Longer-term design notes on
+concurrency, cross-tab state, client rendering and serverless deployment live in
+[`ideas/concurrency-and-state.md`](ideas/concurrency-and-state.md).
 
 ## Contributing
 
