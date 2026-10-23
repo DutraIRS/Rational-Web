@@ -15,9 +15,10 @@ $ playwright install chromium                         # optional: real-browser t
 Every change should pass:
 
 ```console
-$ pytest                         # unit, integration, examples (+ browser tests if Chromium is present)
+$ pytest --cov=rational --cov-branch   # CI requires >= 88% branch coverage (add --ignore=tests/browser to skip the browser)
 $ ruff check . && ruff format --check .
 $ mypy                           # strict
+$ npm ci && npm run lint:js      # browser runtime in src/rational/static (needs Node 20+)
 $ python -m sphinx -W -b html docs docs/_build/html
 ```
 
