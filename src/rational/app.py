@@ -7,7 +7,7 @@ import inspect
 import logging
 import secrets
 import traceback
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from importlib import resources
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -24,7 +24,7 @@ from .concurrency import SyncHandlers
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
-from .http import SESSION_COOKIE, THEME_COOKIE, SecurityHeadersMiddleware, base_path
+from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddleware, base_path
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, error_page
 from .protocol import EVENT_PATH, STREAM_PATH, handle_event, handle_stream
@@ -84,11 +84,17 @@ class App:
         sync_handlers: SyncHandlers = "loop",
         client_nav: bool = False,
         live_session: bool = False,
+        api_only: bool = False,
+        cors_origins: Sequence[str] = (),
     ) -> None:
         if handler_timeout is not None and handler_timeout <= 0:
             raise ValueError("handler_timeout must be a positive number of seconds or None")
         if sync_handlers not in ("loop", "thread"):
             raise ValueError("sync_handlers must be 'loop' or 'thread'")
+        if "*" in cors_origins and len(cors_origins) > 1:
+            raise ValueError("cors_origins: use '*' on its own, or list the allowed origins")
+        self.api_only = api_only
+        self.cors_origins = tuple(cors_origins)
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers
         self.client_nav = client_nav
@@ -145,12 +151,17 @@ class App:
         )
         self.fastapi.add_middleware(TelemetryMiddleware, telemetry=self.logging)
         self.fastapi.add_middleware(SecurityHeadersMiddleware)
-        routes: list[tuple[str, Callable[..., Any], str]] = [
-            *([(f"{self.api_prefix}/docs", self._api_docs, "GET")] if api_docs else []),
+        if self.cors_origins:
+            self.fastapi.add_middleware(ScopedCORS, prefix=self.api_prefix, origins=self.cors_origins)
+        page_routes: list[tuple[str, Callable[..., Any], str]] = [
             ("/_rational/runtime.js", self._asset(self.runtime_js, "text/javascript"), "GET"),
             ("/_rational/theme.css", self._asset(self.theme_css, "text/css"), "GET"),
             (EVENT_PATH, self._event, "POST"),
             (STREAM_PATH, self._stream, "GET"),
+        ]
+        routes: list[tuple[str, Callable[..., Any], str]] = [
+            *([(f"{self.api_prefix}/docs", self._api_docs, "GET")] if api_docs else []),
+            *([] if api_only else page_routes),
             (DEV_SCRIPT_PATH, self._dev_script, "GET"),
             (BOOT_PATH, self._dev_boot, "GET"),
         ]
@@ -163,6 +174,8 @@ class App:
 
     def page(self, path: str, *, title: str | None = None, auth: str | None = None) -> Callable[[P], P]:
         """Register a ``Page`` subclass at ``path``. ``{name}`` segments become typed props."""
+        if self.api_only:
+            raise TypeError("this App is api_only=True and serves no pages; remove api_only or use @app.service")
 
         def decorator(cls: P) -> P:
             if not (isinstance(cls, type) and issubclass(cls, Page)):

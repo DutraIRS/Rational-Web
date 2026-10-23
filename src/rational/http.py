@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hmac
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
+from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 if TYPE_CHECKING:
@@ -48,6 +50,31 @@ def security_headers(response: Response, nonce: str | None, *, inline_styles: bo
             f"default-src 'self'; script-src 'self'; style-src {style_src}; img-src 'self' data: https:; "
             "object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'"
         )
+
+
+class ScopedCORS:
+    """CORS for the API prefix only; pages and framework assets never get cross-origin access.
+
+    Credentials are never allowed: cross-origin callers authenticate with a bearer token
+    (``App.authenticate``), not the session cookie.
+    """
+
+    def __init__(self, app: ASGIApp, *, prefix: str, origins: Sequence[str]) -> None:
+        self.app = app
+        self.prefix = prefix
+        self.cors = CORSMiddleware(
+            app,
+            allow_origins=list(origins),
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+            allow_credentials=False,
+            max_age=600,
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = str(scope.get("path", ""))
+        covered = scope["type"] == "http" and (path == self.prefix or path.startswith(self.prefix + "/"))
+        await (self.cors if covered else self.app)(scope, receive, send)
 
 
 class SecurityHeadersMiddleware:
