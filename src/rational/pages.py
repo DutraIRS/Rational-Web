@@ -20,7 +20,7 @@ from .context import Context
 from .document import render_document
 from .errors import RationalError, Redirect
 from .http import base_path, security_headers
-from .protocol import EVENT_PATH, PROTOCOL_VERSION, STREAM_PATH
+from .protocol import EVENT_PATH, PROTOCOL_VERSION, STREAM_PATH, WS_PATH
 from .rendering.html import escape_text, to_html
 from .runtime import PageRuntime
 from .styling.compiler import StyleSheet
@@ -135,6 +135,7 @@ class PageRoute:
                 "csrf": session.csrf,
                 "endpoint": base + EVENT_PATH,
                 "stream": base + STREAM_PATH if runtime.wants_stream else None,
+                "ws": base + WS_PATH if app.websocket else None,
                 "api": base + app.api_prefix,
                 "base": base,
                 "nav": app.client_nav,

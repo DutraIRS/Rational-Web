@@ -35,7 +35,8 @@ Decisions
        ``App(fine_patches=False)`` always sends whole-component morphs.
    * - Transport
      - HTTP ``POST`` per event, one in flight per tab (client queue; input coalescing).
-       WebSockets are deferred.
+       Server push uses SSE, or an opt-in WebSocket (``App(websocket=True)``) that carries the same
+       batches; events always use ``POST``.
    * - Identity
      - ``parent/Class:n`` or ``parent/Class#key``. Same identity and class ⇒ the instance is
        reused (state kept, props refreshed). Unvisited instances are unmounted.

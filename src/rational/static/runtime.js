@@ -138,14 +138,38 @@
   // ---- server push -------------------------------------------------------------------------
   function openStream() {
     if (source || !M.stream || typeof EventSource === "undefined") return;
-    source = new EventSource(`${M.stream}?page=${encodeURIComponent(M.page)}`);
-    source.onmessage = (m) => {
-      let data;
-      try { data = JSON.parse(m.data); } catch { return; }
-      // After a reconnect, a seq ahead of ours means batches were missed: resync with a reload.
-      if (typeof data.hello === "number") { if (data.hello > lastSeq) location.reload(); return; }
-      if (busy) held.push(data); else apply(data);
+    if (M.ws && typeof WebSocket !== "undefined" && openSocket()) return;
+    openSse();
+  }
+
+  function onPush(raw) {
+    let data;
+    try { data = JSON.parse(raw); } catch { return; }
+    // After a reconnect, a seq ahead of ours means batches were missed: resync with a reload.
+    if (typeof data.hello === "number") { if (data.hello > lastSeq) location.reload(); return; }
+    if (busy) held.push(data); else apply(data);
+  }
+
+  function openSocket() {
+    let ws;
+    try {
+      ws = new WebSocket(new URL(`${M.ws}?page=${encodeURIComponent(M.page)}`, location.href).href.replace(/^http/, "ws"));
+    } catch { return false; }
+    let opened = false;
+    source = ws;
+    ws.onopen = () => { opened = true; };
+    ws.onmessage = (m) => onPush(m.data);
+    ws.onclose = () => {
+      if (source !== ws) return;
+      source = null;
+      if (opened) setTimeout(openStream, 1000); else { M.ws = null; openStream(); }
     };
+    return true;
+  }
+
+  function openSse() {
+    source = new EventSource(`${M.stream}?page=${encodeURIComponent(M.page)}`);
+    source.onmessage = (m) => onPush(m.data);
     source.onerror = () => {
       if (source && source.readyState === EventSource.CLOSED) { source.close(); source = null; }
     };

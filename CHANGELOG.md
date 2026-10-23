@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `App(websocket=True)`: server push over a same-origin, session-checked WebSocket with SSE fallback;
+  new `websockets` extra.
 - `App(adapter=bootstrap() | tailwind(...), stylesheets=, scripts=)` with `Asset` (integrity, https-only),
   CSP origins for external assets, and `cx()` for class names.
 - `Suspense` and `Skeleton`: respond with a fallback immediately and push slow content when ready;

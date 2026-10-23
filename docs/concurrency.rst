@@ -90,6 +90,16 @@ the stream only when it has tasks. Details worth knowing:
 Loading states and deferred content
 -----------------------------------
 
+WebSocket push
+--------------
+
+``App(websocket=True)`` delivers the push stream over a WebSocket (``/_rational/ws``) instead of
+SSE. The batches are identical; the browser falls back to SSE if the socket cannot be opened, and
+reconnects after a drop. Events still travel over ``POST``, so CSRF, rate limits and revision checks
+are unchanged. The socket requires the page's own session cookie and a same-origin ``Origin`` header.
+Install the ``websockets`` extra (or ``wsproto``) so Uvicorn can serve it. SSE is the default because
+it works through more proxies.
+
 ``Suspense`` sends the page immediately with a fallback and pushes the real content when it is
 ready, so one slow query never delays the first paint:
 

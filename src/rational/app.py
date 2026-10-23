@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from importlib import resources
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -29,7 +29,7 @@ from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddl
 from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, error_page
-from .protocol import EVENT_PATH, STREAM_PATH, handle_event, handle_stream
+from .protocol import EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
 from .router import Router
 from .runtime import PageRuntime
 from .session import Session, SessionBackend, SessionStore, TTLStore
@@ -89,6 +89,7 @@ class App:
         api_only: bool = False,
         cors_origins: Sequence[str] = (),
         fine_patches: bool = True,
+        websocket: bool = False,
         i18n: I18n | None = None,
         adapter: Adapter | None = None,
         stylesheets: Sequence[str | Asset] = (),
@@ -102,6 +103,7 @@ class App:
             raise ValueError("cors_origins: use '*' on its own, or list the allowed origins")
         self.api_only = api_only
         self.fine_patches = fine_patches
+        self.websocket = websocket and not api_only
         self.i18n = i18n
         if adapter is not None and adapter.needs_inline_styles and csp:
             raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
@@ -180,6 +182,8 @@ class App:
         ]
         for path, endpoint, method in routes:
             self.fastapi.add_api_route(path, endpoint, methods=[method], include_in_schema=False)
+        if self.websocket:
+            self.fastapi.add_api_websocket_route(WS_PATH, self._ws)
         self.fastapi.add_exception_handler(StarletteHTTPException, self._http_error)  # type: ignore[arg-type]
         self.fastapi.add_exception_handler(Exception, self._server_error)
 
@@ -359,6 +363,9 @@ class App:
 
     async def _stream(self, request: Request) -> Response:
         return await handle_stream(self, request)
+
+    async def _ws(self, websocket: WebSocket) -> None:
+        await handle_websocket(self, websocket)
 
     async def _api_docs(self, request: Request) -> Response:
         session = (await self.context_for(request)).peek_session()

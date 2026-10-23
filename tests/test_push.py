@@ -282,3 +282,88 @@ def test_run_task_rejects_sync_functions():
         TestClient(
             app,
         ).open("/")
+
+
+class Socket:
+    """A raw ASGI WebSocket client."""
+
+    def __init__(self, raw, manifest, *, origin="http://testserver", page=None):
+        self.inbox: asyncio.Queue = asyncio.Queue()
+        self.accepted = False
+        self.close_code = None
+        self._gone = asyncio.Event()
+        headers = {"origin": origin} if origin else {}
+        scope = raw._scope("GET", manifest["ws"], f"page={page or manifest['page']}", headers)
+        scope.update(type="websocket", scheme="ws", subprotocols=[])
+        scope["headers"] = [h for h in scope["headers"] if h[0] != b"accept"]
+        sent = [{"type": "websocket.connect"}]
+
+        async def receive():
+            if sent:
+                return sent.pop(0)
+            await self._gone.wait()
+            return {"type": "websocket.disconnect", "code": 1000}
+
+        async def send(message):
+            if message["type"] == "websocket.accept":
+                self.accepted = True
+            elif message["type"] == "websocket.send":
+                await self.inbox.put(json.loads(message["text"]))
+            elif message["type"] == "websocket.close":
+                self.close_code = message.get("code", 1000)
+                await self.inbox.put(None)
+
+        self.task = asyncio.get_running_loop().create_task(raw.app(scope, receive, send))
+
+    async def next(self, timeout=2):
+        return await asyncio.wait_for(self.inbox.get(), timeout)
+
+    async def close(self):
+        self._gone.set()
+        await asyncio.wait_for(self.task, 2)
+
+
+def make_ws_app():
+    app, spawned = make_app()
+    app.websocket = True
+    app.fastapi.add_api_websocket_route("/_rational/ws", app._ws)
+    return app, spawned
+
+
+async def test_websocket_carries_pushed_patches():
+    app, _ = make_ws_app()
+    raw = Raw(app)
+    manifest, _html = await raw.open_page()
+    assert manifest["ws"] == "/_rational/ws"
+
+    sock = Socket(raw, manifest)
+    assert await sock.next() == {"hello": 0}
+    while True:
+        frame = await sock.next()
+        if "Count: 3" in json.dumps(frame["patches"]):
+            break
+    await sock.close()
+    assert not app.pages.get(manifest["page"]).subscribers
+
+
+async def test_websocket_rejects_foreign_origin_stranger_and_missing_page():
+    app, _ = make_ws_app()
+    raw = Raw(app)
+    manifest, _html = await raw.open_page()
+
+    for sock in (
+        Socket(raw, manifest, origin="http://evil.example"),
+        Socket(raw, manifest, origin=""),
+        Socket(Raw(app), manifest),
+        Socket(raw, manifest, page="nope"),
+    ):
+        assert await sock.next() is None
+        assert not sock.accepted and sock.close_code == 1008
+        await sock.close()
+
+
+async def test_websocket_is_off_by_default():
+    app, _ = make_app()
+    raw = Raw(app)
+    manifest, _html = await raw.open_page()
+    assert manifest["ws"] is None

@@ -8,19 +8,21 @@ Response: ``{v, rev, patches, css: [rule], actions: [...], error?, csrf?}`` wher
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
-from fastapi import Request, Response
+from fastapi import Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ValidationError
 
 from . import dev
 from .errors import InvalidInput, RationalError, Redirect
-from .http import csrf_ok, json_error
+from .http import SESSION_COOKIE, csrf_ok, json_error
 from .runtime import StaleHandlerError
 
 if TYPE_CHECKING:
@@ -31,6 +33,7 @@ log = logging.getLogger("rational")
 PROTOCOL_VERSION = 1
 EVENT_PATH = "/_rational/event"
 STREAM_PATH = "/_rational/stream"
+WS_PATH = "/_rational/ws"
 STREAM_KEEPALIVE_SECONDS = 15
 
 
@@ -191,3 +194,52 @@ async def handle_stream(app: App, request: Request) -> Response:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+def _same_origin(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host")
+    return bool(origin and host and urlsplit(origin).netloc == host)
+
+
+async def handle_websocket(app: App, websocket: WebSocket) -> None:
+    """``/_rational/ws?page=ID``: the push stream over a WebSocket. Events still travel over POST."""
+    runtime = app.pages.get(websocket.query_params.get("page"))
+    session = await app.sessions.load(websocket.cookies.get(SESSION_COOKIE))
+    if runtime is None or session is None or session is not runtime.session or not _same_origin(websocket):
+        await websocket.close(code=1008)
+        return
+    queue = runtime.subscribe()
+    if queue is None:
+        await websocket.close(code=1013)
+        return
+    await websocket.accept()
+
+    async def watch_disconnect() -> None:
+        try:
+            while True:
+                await websocket.receive_text()  # clients send nothing; this only notices the close
+        except WebSocketDisconnect:
+            return
+
+    watcher = asyncio.create_task(watch_disconnect())
+    try:
+        await websocket.send_json({"hello": runtime.seq})
+        while not watcher.done():
+            getter = asyncio.ensure_future(queue.get())
+            await asyncio.wait({getter, watcher}, timeout=STREAM_KEEPALIVE_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+            if not getter.done():
+                getter.cancel()
+                app.pages.get(runtime.id)  # an open socket keeps the page alive
+                continue
+            batch = getter.result()
+            if batch is None:
+                break
+            await websocket.send_json(batch)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        watcher.cancel()
+        runtime.unsubscribe(queue)
+        with contextlib.suppress(RuntimeError):
+            await websocket.close()
