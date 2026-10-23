@@ -17,7 +17,7 @@ Components
 ----------
 
 .. autoclass:: rational.Component
-   :members: render, mount, unmount, context, use, touch, navigate, run_js
+   :members: render, mount, unmount, context, use, touch, navigate, run_js, run_task
 
 .. autoclass:: rational.Page
 

@@ -197,6 +197,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 
 **0.2: interactivity**
 - [ ] WebSocket transport (optional) and server push for collaborative pages
+  (server push over SSE and page-scoped background tasks have landed; cross-tab sync is next)
 - [ ] Client-side navigation between pages, with no full reload
 - [ ] Finer-grained server diffs (text and attribute patches)
 - [ ] More components: `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, with full keyboard support

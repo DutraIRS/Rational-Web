@@ -12,6 +12,11 @@ All notable changes to this project are documented here. The format follows
 - Optional thread offload for synchronous handlers: `App(sync_handlers="thread")` and the
   `@threaded` / `@threaded(enabled=False)` decorators. The default stays `"loop"`.
 - A concurrency guide (`docs/concurrency.rst`).
+- Background tasks: `Component.run_task(async_fn, *args)` runs work for as long as the component is
+  mounted, and the state it changes is pushed to the browser over a server-sent-events stream
+  (`GET /_rational/stream`). Tasks are cancelled on unmount and when the page expires.
+- Protocol: responses carry a `seq` number, so the browser applies pushed and event-driven patches in
+  render order, and reloads if a reconnect shows it missed a batch.
 
 ## [0.1.0a2] - 2026-10-22
 

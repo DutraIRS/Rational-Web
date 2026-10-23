@@ -51,3 +51,38 @@ Rendering and ``mount`` always stay on the loop. ``async def`` handlers are neve
    A thread cannot be cancelled. If a threaded handler times out the client gets a ``504``,
    but the thread keeps running and may still change state afterwards. Prefer ``async``
    code for anything long-running, and make threaded handlers safe to finish late.
+
+Background tasks and server push
+--------------------------------
+
+``run_task`` starts an ``async`` function that lives as long as the component::
+
+    class Clock(Component):
+        now = State("")
+
+        async def mount(self):
+            self.run_task(self.tick)
+
+        async def tick(self):
+            while True:
+                self.now = datetime.now().strftime("%H:%M:%S")
+                await asyncio.sleep(1)
+
+        def render(self):
+            return Text(self.now)
+
+Whenever the task changes state, the affected components are re-rendered and the patches are
+sent to the browser over a server-sent-events stream (``GET /_rational/stream``). The page opens
+the stream only when it has tasks. Details worth knowing:
+
+* The task is cancelled when the component unmounts or the page expires. An open stream keeps the
+  page alive; closing the tab lets it expire as usual.
+* Changes made before the stream connects are delivered when it does. Bursts of changes are
+  coalesced into one batch.
+* Every batch has a ``seq`` number. The browser applies pushed and event-driven updates in render
+  order, and reloads the page if a reconnect shows it missed some.
+* An exception in the task is logged, not shown to the user. Only ``async`` functions are accepted.
+* A page may hold at most four open streams (for example, one tab plus reconnects).
+* Task code does not hold the session or page locks while it runs, so keep each state change
+  small and consistent. Request-scoped helpers such as ``self.context`` refer to the most recent
+  event and may be stale; prefer services and ``self.app``.

@@ -132,6 +132,8 @@ without sticky workers), then D4 adapters.
 
 ## Overall priorities
 
+Status: items 1 and the A5/A4 part of item 3 are implemented (see the changelog).
+
 1. Handler timeouts, thread offload and the concurrency docs (A2, A1).
 2. Client-side navigation and declarative client actions (C1, C2).
 3. Page background tasks and SSE push (A5, A4), then live cross-tab session sync (B1).
