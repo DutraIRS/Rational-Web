@@ -45,7 +45,7 @@ from .router import Router
 from .state import State
 from .styling import Breakpoint, Style, Theme
 
-__version__ = "0.1.0a1"
+__version__ = "0.1.0a2"
 
 __all__ = [
     "App",

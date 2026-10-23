@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a2] - 2026-10-22
+
 ### Added
 - Static export: `python app.py --export DIR` (and `rational.export.export_site`) writes the
   app's static pages, theme CSS, mounted static directories and a `404.html` as plain HTML for
