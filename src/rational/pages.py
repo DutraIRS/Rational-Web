@@ -137,8 +137,12 @@ class PageRoute:
                 "stream": base + STREAM_PATH if runtime.wants_stream else None,
                 "api": base + app.api_prefix,
                 "base": base,
+                "nav": app.client_nav,
                 "debug": app.debug,
             }
+        elif app.client_nav:
+            # No events here, but the runtime still handles link clicks.
+            manifest = {"v": PROTOCOL_VERSION, "nav": True, "base": base, "debug": app.debug}
         runtime.sheet.drain()
         nonce = secrets.token_urlsafe(16) if app.csp else None
         html = render_document(

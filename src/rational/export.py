@@ -45,6 +45,7 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
     base = base_path.rstrip("/")
     report = ExportReport()
     was_debug, app.debug = app.debug, False
+    was_nav, app.client_nav = app.client_nav, False  # an exported site has no runtime to navigate with
     try:
         async with app.fastapi.router.lifespan_context(app.fastapi):
             for route in app.routes.values():
@@ -78,6 +79,7 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
                     report.assets.append(mount.path)
     finally:
         app.debug = was_debug
+        app.client_nav = was_nav
     return report
 
 

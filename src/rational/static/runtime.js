@@ -5,13 +5,16 @@
   "use strict";
   const manifestEl = document.getElementById("rw-manifest");
   if (!manifestEl || window.rational) return;
-  const M = JSON.parse(manifestEl.textContent);
+  let M = JSON.parse(manifestEl.textContent);
   const PROTOCOL = 1;
   const INPUT_DEBOUNCE_MS = 150;
   let rev = M.rev;
   let lastSeq = M.seq || 0;
   let busy = false;
   let source = null;
+  let epoch = 0;  // bumped on every client-side navigation so late responses from the old page are ignored
+  let navAbort = null;
+  let here = location.pathname + location.search;
   const held = [];  // pushed batches that arrived while an event was in flight
   const queue = [];
   const timers = new Map();
@@ -95,7 +98,9 @@
     if (busy) return;
     const item = queue.shift();
     if (!item) return;
+    if (!M.page) { queue.length = 0; return; }  // a page without events (navigation-only manifest)
     busy = true;
+    const mine = epoch;
     const el = item.el;
     if (el && item.name !== "input") el.setAttribute("aria-busy", "true");
     try {
@@ -105,8 +110,10 @@
         headers: { "Content-Type": "application/json", "X-RW-CSRF": M.csrf },
         body: JSON.stringify({ v: PROTOCOL, page: M.page, rev, handler: item.handler, payload: item.payload }),
       });
+      if (mine !== epoch) return;  // we navigated away while this was in flight
       if (res.status === 410) { location.reload(); return; }
       const data = await res.json().catch(() => ({ error: { code: "bad_response", message: "Unexpected response" } }));
+      if (mine !== epoch) return;
       // Pushed batches rendered before this response go first, so older HTML never overwrites newer.
       const seq = typeof data.seq === "number" ? data.seq : Infinity;
       held.sort((a, b) => a.seq - b.seq);
@@ -157,7 +164,7 @@
       if (next) morph(el, next);
     }
     for (const a of data.actions || []) {
-      if (a.op === "navigate" && isSameOrigin(a.url)) location.assign(a.url.startsWith("/") ? (M.base || "") + a.url : a.url);
+      if (a.op === "navigate" && isSameOrigin(a.url)) go(a.url.startsWith("/") ? (M.base || "") + a.url : a.url);
       else if (a.op === "reload") location.reload();
       else if (a.op === "stream") { M.stream = M.stream || M.endpoint.replace(/event$/, "stream"); openStream(); }
       else if (a.op === "js") runOps(a.ops, document.body);
@@ -317,6 +324,86 @@
       if (fn(el, ...args) === false) return false;  // e.g. a declined confirm()
     }
     return true;
+  }
+
+  // ---- client-side navigation (App(client_nav=True)) ---------------------------------------
+  function go(url) {
+    if (M.nav) navigate(url, true); else location.assign(url);
+  }
+
+  document.addEventListener("click", (e) => {
+    if (!M.nav || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    if (!a || (a.target && a.target !== "_self") || a.hasAttribute("download") || a.hasAttribute("data-rw-reload")) return;
+    if (a.getAttribute("rel")?.split(/\s+/).includes("external")) return;
+    const url = new URL(a.href, location.href);
+    if (url.origin !== location.origin || !/^https?:$/.test(url.protocol)) return;
+    if (url.pathname === location.pathname && url.search === location.search && url.hash) return;  // in-page anchor
+    e.preventDefault();
+    navigate(url.href, true);
+  });
+
+  window.addEventListener("popstate", () => {
+    if (!M.nav || location.pathname + location.search === here) return;  // hash-only changes stay in place
+    navigate(location.href, false);
+  });
+
+  async function navigate(url, push) {
+    if (navAbort) navAbort.abort();
+    const abort = navAbort = new AbortController();
+    emit(document, "rw:navigating", { url });
+    document.documentElement.setAttribute("aria-busy", "true");
+    try {
+      const res = await fetch(url, { credentials: "same-origin", headers: { Accept: "text/html" }, signal: abort.signal });
+      if (!(res.headers.get("Content-Type") || "").includes("text/html")) throw new Error("not a page");
+      const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+      if (abort.signal.aborted) return;
+      swap(doc, res.url || url, push);
+    } catch (err) {
+      if (abort.signal.aborted) return;
+      if (M.debug) console.warn("[rational] client navigation failed, loading normally:", err);
+      location.assign(url);  // anything unexpected falls back to a normal page load
+    } finally {
+      if (navAbort === abort) { navAbort = null; document.documentElement.removeAttribute("aria-busy"); }
+    }
+  }
+
+  function swap(doc, url, push) {
+    const nextManifest = doc.getElementById("rw-manifest");
+    if (!nextManifest) { location.assign(url); return; }  // a page without the runtime
+    epoch++;
+    if (source) { source.close(); source = null; }
+    queue.length = 0;
+    held.length = 0;
+    for (const t of timers.values()) clearTimeout(t);
+    timers.clear();
+    M = JSON.parse(nextManifest.textContent);
+    rev = M.rev;
+    lastSeq = M.seq || 0;
+    busy = false;
+    if (push) history.pushState(null, "", url);
+    here = location.pathname + location.search;
+    document.title = doc.title;
+    const description = doc.querySelector('meta[name="description"]');
+    const current = document.querySelector('meta[name="description"]');
+    if (description && current) current.setAttribute("content", description.getAttribute("content") || "");
+    else if (description) document.head.appendChild(document.importNode(description, true));
+    else if (current) current.remove();
+    document.getElementById("rw-styles").textContent = doc.getElementById("rw-styles").textContent;
+    const keep = document.getElementById("rw-manifest");
+    for (const n of Array.from(document.body.childNodes)) if (n !== keep && n.nodeName !== "SCRIPT") n.remove();
+    keep.textContent = nextManifest.textContent;
+    for (const n of Array.from(doc.body.childNodes)) {
+      if (n.nodeName === "SCRIPT") continue;
+      document.body.insertBefore(document.importNode(n, true), keep);
+    }
+    openStream();
+    const hash = new URL(url).hash;
+    const anchor = hash && document.getElementById(decodeURIComponent(hash.slice(1)));
+    if (anchor) anchor.scrollIntoView(); else window.scrollTo(0, 0);
+    const heading = document.querySelector("main, h1");
+    if (heading) { if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1"); heading.focus({ preventScroll: true }); }
+    emit(document, "rw:navigated", { url });
   }
 
   // ---- public hook for custom scripts ------------------------------------------------------

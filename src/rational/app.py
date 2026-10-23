@@ -82,6 +82,7 @@ class App:
         max_event_bytes: int = 64 * 1024,
         handler_timeout: float | None = None,
         sync_handlers: SyncHandlers = "loop",
+        client_nav: bool = False,
     ) -> None:
         if handler_timeout is not None and handler_timeout <= 0:
             raise ValueError("handler_timeout must be a positive number of seconds or None")
@@ -89,6 +90,7 @@ class App:
             raise ValueError("sync_handlers must be 'loop' or 'thread'")
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers
+        self.client_nav = client_nav
         self.title = title
         self.api_docs = api_docs
         self.theme = get_theme(theme)

@@ -101,6 +101,8 @@ class PageView:
         self.dom = parse(response.text)
         manifest = self.dom.find_all("script", id="rw-manifest")
         self.manifest: dict[str, Any] | None = json.loads(manifest[0].text) if manifest else None
+        if self.manifest is not None and "page" not in self.manifest:
+            self.manifest = None  # navigation-only manifest: no events can be sent
         self.last: dict[str, Any] = {}
 
     @property
