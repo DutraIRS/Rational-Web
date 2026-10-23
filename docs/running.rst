@@ -76,6 +76,8 @@ to a normal load. Two caveats:
 The old page's server-side view and background tasks stop when its stream closes and the page
 expires. Static export ignores ``client_nav``.
 
+.. _static-export:
+
 Static export
 -------------
 
@@ -118,6 +120,33 @@ application, then enable tracing:
 
 The framework does not install or configure an exporter, so the host application retains
 control over where telemetry is sent.
+
+API-only apps and a static front end
+------------------------------------
+
+A Rational app can be just an API. ``api_only=True`` serves ``@remote`` services and nothing
+else (no pages, no runtime script, no event or stream endpoints). Because there is no session
+cookie, callers authenticate with a token, and CSRF does not apply::
+
+    app = App(api_only=True, cors_origins=["https://my-site.example"])
+
+    @app.authenticate
+    def bearer(ctx):
+        header = ctx.request.headers.get("authorization", "")
+        return verify_token(header.removeprefix("Bearer ")) if header.startswith("Bearer ") else None
+
+    @app.service
+    class Notes(Service):
+        @remote(auth="required")
+        def mine(self) -> list[Note]: ...
+
+``cors_origins`` allows those browser origins to call the API prefix (and only the API prefix).
+Credentials are never allowed cross-origin, so the session cookie is not sent: use the bearer
+token. Use ``["*"]`` for a public API. OpenAPI is at ``/api/openapi.json`` for generating clients.
+
+Pair this with :ref:`static export <static-export>` for the pages: ``--export`` the site to any
+static host and run the API anywhere that serves ASGI. The pages call the API with ``fetch``
+(or ``rational.call`` on an interactive page).
 
 Other deployment strategies
 ---------------------------

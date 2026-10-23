@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
 - Optional thread offload for synchronous handlers: `App(sync_handlers="thread")` and the
   `@threaded` / `@threaded(enabled=False)` decorators. The default stays `"loop"`.
 - A concurrency guide (`docs/concurrency.rst`).
+- API-only apps: `App(api_only=True)` serves just the `@remote` services (no pages, runtime script or
+  sessions needed), and `App(cors_origins=[...])` lets listed browser origins call the API prefix
+  with a bearer token. Credentials are never allowed cross-origin.
 - Live sessions: `App(live_session=True)` pushes session-data changes made in one tab to the other
   tabs of the same browser over the stream, with no click needed. Off by default.
 - Client-side navigation: `App(client_nav=True)` swaps same-origin links in place (history, title,
