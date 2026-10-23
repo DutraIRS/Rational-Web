@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import dev
 from .errors import InvalidInput, RationalError, Redirect
-from .http import SESSION_COOKIE, csrf_ok, json_error
+from .http import csrf_ok, json_error
 from .runtime import StaleHandlerError
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ async def handle_event(app: App, request: Request) -> Response:
     runtime = app.pages.get(event.page)
     if runtime is None:
         return _error(410, "expired", "This page expired")
-    session = app.sessions.get(request.cookies.get(SESSION_COOKIE))
+    session = await app.load_session(request)
     if session is None or session is not runtime.session:
         return _error(403, "forbidden", "Session mismatch")
     if not csrf_ok(request, session):
@@ -158,7 +158,7 @@ async def handle_stream(app: App, request: Request) -> Response:
     runtime = app.pages.get(request.query_params.get("page"))
     if runtime is None:
         return _error(410, "expired", "This page expired")
-    session = app.sessions.get(request.cookies.get(SESSION_COOKIE))
+    session = await app.load_session(request)
     if session is None or session is not runtime.session:
         return _error(403, "forbidden", "Session mismatch")
     queue = runtime.subscribe()

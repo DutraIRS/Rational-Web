@@ -30,7 +30,7 @@ from .pages import PageRoute, error_page
 from .protocol import EVENT_PATH, STREAM_PATH, handle_event, handle_stream
 from .router import Router
 from .runtime import PageRuntime
-from .session import SessionBackend, SessionStore, TTLStore
+from .session import Session, SessionBackend, SessionStore, TTLStore
 from .styling.compiler import StyleCompiler
 from .styling.responsive import Breakpoint
 from .styling.theme import Theme, ThemeMode, get_theme
@@ -269,9 +269,12 @@ class App:
 
     # -- request context & sessions -----------------------------------------------------------
 
+    async def load_session(self, request: Request) -> Session | None:
+        return await self.sessions.load(request.cookies.get(SESSION_COOKIE))
+
     async def context_for(self, request: Request, session: Any = None) -> Context:
         if session is None:
-            session = self.sessions.get(request.cookies.get(SESSION_COOKIE))
+            session = await self.load_session(request)
         ctx = Context(self, request, session)
         request.state.rational_context = ctx
         if self.authenticator is not None:
@@ -308,13 +311,21 @@ class App:
 
     @asynccontextmanager
     async def session_lock(self, ctx: Context) -> AsyncIterator[None]:
-        """Serialize requests that mutate a session shared by multiple pages."""
+        """Serialize requests that mutate a session shared by multiple pages, then persist it."""
         session = ctx.peek_session()
         if session is None:
-            yield
+            try:
+                yield
+            finally:
+                created = ctx.peek_session()  # the request may have created the session meanwhile
+                if created is not None:
+                    await self.sessions.save(created)
             return
         async with session.lock:
-            yield
+            try:
+                yield
+            finally:
+                await self.sessions.save(ctx.peek_session() or session)
 
     def data_theme(self, request: Request) -> str | None:
         chosen = request.cookies.get(THEME_COOKIE)

@@ -52,6 +52,7 @@ from .logging import Logging
 from .rendering import h, unsafe_html
 from .router import Router
 from .state import State
+from .stores import PersistentSessionStore, RedisSessionDriver
 from .styling import Breakpoint, Style, Theme
 
 __version__ = "0.1.0a2"
@@ -93,6 +94,8 @@ __all__ = [
     "Nav",
     "NotFound",
     "Page",
+    "PersistentSessionStore",
+    "RedisSessionDriver",
     "RemoteError",
     "Router",
     "Row",

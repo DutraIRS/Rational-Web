@@ -31,6 +31,9 @@ class Session(MutableMapping[str, Any]):
         self.state: dict[str, Any] = {}
         self.lock = asyncio.Lock()
         self.revision = 0
+        self.version = 0  # write counter of the persisted copy; only used by persistent stores
+        self.saved_revision = -1  # the revision last written out; -1 means never
+        self.touched_at = 0.0
         self.rotated = False
         # Page runtimes that want to hear about changes (live cross-tab sync); weak, so they can expire.
         self.listeners: weakref.WeakSet[Any] = weakref.WeakSet()
@@ -125,12 +128,19 @@ class TTLStore(Generic[V]):
 
 
 class SessionBackend(Protocol):
-    """What ``App`` needs from a session store; implement it to plug in Redis, a database, etc."""
+    """What ``App`` needs from a session store; implement it to plug in Redis, a database, etc.
+
+    ``get``, ``create``, ``rotate`` and ``sweep`` are synchronous and local. ``load`` runs at the start
+    of a request and may fetch from outside the process; ``save`` runs when the request is done with the
+    session and persists it. A purely in-memory store makes both trivial.
+    """
 
     def get(self, sid: str | None) -> Session | None: ...
     def create(self) -> Session: ...
     def rotate(self, session: Session) -> None: ...
     def sweep(self) -> int: ...
+    async def load(self, sid: str | None) -> Session | None: ...
+    async def save(self, session: Session) -> None: ...
 
 
 class SessionStore:
@@ -141,6 +151,12 @@ class SessionStore:
 
     def get(self, sid: str | None) -> Session | None:
         return self._store.get(sid)
+
+    async def load(self, sid: str | None) -> Session | None:
+        return self.get(sid)
+
+    async def save(self, session: Session) -> None:
+        return None
 
     def create(self) -> Session:
         session = Session(secrets.token_urlsafe(32))

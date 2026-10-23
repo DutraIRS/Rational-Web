@@ -201,8 +201,9 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Client-side navigation between pages, with no full reload (`App(client_nav=True)`)
 - [ ] Finer-grained server diffs (text and attribute patches)
 - [x] More components: `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, with keyboard support for tabs and menus
-- [ ] Pluggable session store (for example Redis); page runtimes remain worker-local, so
-      multi-worker deployments still need sticky routing
+- [x] Pluggable session store: `PersistentSessionStore` with a Redis driver (logins and API work on
+      any worker and survive restarts); page runtimes remain worker-local, so interactive pages on
+      several workers still need sticky routing
 
 **0.3: productivity**
 - [ ] `rational new` project scaffolding and an Alembic migration workflow

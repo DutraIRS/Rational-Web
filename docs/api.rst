@@ -83,6 +83,9 @@ Sessions
 .. autoclass:: rational.session.SessionBackend
    :members:
 
+.. automodule:: rational.stores
+   :members: PersistentSessionStore, RedisSessionDriver, MemorySessionDriver, SessionDriver
+
 Errors
 ------
 

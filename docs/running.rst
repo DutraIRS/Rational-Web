@@ -52,6 +52,27 @@ when a proxy serves the app under a sub-path.
    Page views (component state) live in process memory. Run one worker per container,
    or use sticky sessions when you run several (``--workers N`` prints a reminder).
 
+Sessions across workers and restarts
+------------------------------------
+
+By default sessions live in process memory too, so a restart logs everyone out. Give the app a
+persistent store and logins, CSRF tokens and API calls work on any worker and survive restarts::
+
+    from rational import App, PersistentSessionStore, RedisSessionDriver
+
+    app = App(session_store=PersistentSessionStore(RedisSessionDriver(url="redis://localhost:6379/0")))
+
+Install the client with ``pip install "rational[redis]"``. Each request reads its session from Redis
+(one round trip) and writes it back only if it changed. A change or logout on one worker is seen by
+the others. What is stored is JSON: the CSRF token and ``session.data`` including the signed-in user,
+so keep session values JSON-compatible (or pass ``serialize=`` and ``deserialize=``). It is never
+pickled, because a shared store is a trust boundary. Match ``ttl=`` to ``App(session_ttl=...)``.
+
+Limits: concurrent writes from different workers are last-write-wins, and
+``State(scope="session")`` values and open pages are still worker-local, so interactive pages
+still need sticky routing. Any other backend (a database, say) only has to implement
+:class:`~rational.stores.SessionDriver`: four async methods, ``get``, ``set``, ``touch`` and ``delete``.
+
 Client-side navigation
 ----------------------
 
