@@ -52,6 +52,30 @@ when a proxy serves the app under a sub-path.
    Page views (component state) live in process memory. Run one worker per container,
    or use sticky sessions when you run several (``--workers N`` prints a reminder).
 
+Client-side navigation
+----------------------
+
+By default every link is a full page load. ``App(client_nav=True)`` makes same-origin links swap
+the page in place instead, with no reload and no flash::
+
+    app = App(client_nav=True)
+
+The browser fetches the next page's HTML, swaps the body, title, description and page styles,
+updates the address bar and history, and moves focus to ``<main>`` (or the first ``<h1>``).
+Back and forward work. ``self.navigate(url)`` and ``raise Redirect(url)`` navigate the same way.
+
+Things that still do a normal load: links with ``target``, ``download``, ``rel="external"`` or
+``data-rw-reload``, modified clicks (Ctrl, Shift, Alt, Cmd), other origins, and any response that
+is not a Rational page. If a client-side navigation fails for any reason, the browser falls back
+to a normal load. Two caveats:
+
+* Scripts inside a page body are not re-run on navigation; put shared scripts in the layout's
+  ``<head>`` or use ``window.rational``.
+* The browser fires ``rw:navigating`` and ``rw:navigated`` events on ``document`` for analytics.
+
+The old page's server-side view and background tasks stop when its stream closes and the page
+expires. Static export ignores ``client_nav``.
+
 Static export
 -------------
 

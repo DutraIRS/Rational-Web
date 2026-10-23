@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
 - Optional thread offload for synchronous handlers: `App(sync_handlers="thread")` and the
   `@threaded` / `@threaded(enabled=False)` decorators. The default stays `"loop"`.
 - A concurrency guide (`docs/concurrency.rst`).
+- Client-side navigation: `App(client_nav=True)` swaps same-origin links in place (history, title,
+  focus and styles handled), and falls back to a normal load on any failure. Events `rw:navigating`
+  and `rw:navigated` are fired on `document`.
 - Background tasks: `Component.run_task(async_fn, *args)` runs work for as long as the component is
   mounted, and the state it changes is pushed to the browser over a server-sent-events stream
   (`GET /_rational/stream`). Tasks are cancelled on unmount and when the page expires.
