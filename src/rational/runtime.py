@@ -8,6 +8,7 @@ each event rerenders dirty components into morph patches.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import inspect
 import itertools
@@ -276,7 +277,12 @@ class PageRuntime:
         if not self.subscribers or self.closed:
             return  # changes stay dirty and go out when a stream connects
         try:
-            async with self.lock:
+            async with contextlib.AsyncExitStack() as stack:
+                # Same order as event handling (session, then page), so the two can never deadlock.
+                if self.session is not None:
+                    await stack.enter_async_context(self.session.lock)
+                await stack.enter_async_context(self.lock)
+                self.refresh_session_state()
                 if not self.dirty and not self.actions:
                     return
                 patches = await self.flush()
@@ -315,11 +321,31 @@ class PageRuntime:
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any] | None]) -> None:
         self.subscribers.discard(queue)
 
+    def on_session_changed(self) -> None:
+        """Called by the session whenever it changes (from any tab); pushes the result to our streams."""
+        if self.subscribers:
+            self.schedule_push()
+
+    def watch_session(self) -> None:
+        """With ``App(live_session=True)``, follow the session if this page renders any of its data."""
+        app = self.context.app
+        session = self.session
+        if app is None or not app.live_session or session is None or self.closed:
+            return
+        if not any(cell[0] == "s" for cell in self.deps):
+            return
+        session.listeners.add(self)
+        if not self.wants_stream:
+            self.wants_stream = True
+            if self.served:
+                self.add_action({"op": "stream"})
+
     def sync_session_revision(self) -> None:
         session = self.context.peek_session()
         if session is not None:
             self.session = session
             self.session_revision = session.revision
+        self.watch_session()
 
     def refresh_session_state(self) -> None:
         """Mark readers of session data dirty if the session changed since we last looked."""
@@ -425,6 +451,8 @@ class PageRuntime:
     def dispose(self) -> None:
         """Unmount everything (the page view expired or was evicted)."""
         self.closed = True
+        if self.session is not None:
+            self.session.listeners.discard(self)
         for cid in list(self.components):
             self._unmount_one(cid)
         for task in list(self.tasks):

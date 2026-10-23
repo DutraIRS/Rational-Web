@@ -83,6 +83,7 @@ class App:
         handler_timeout: float | None = None,
         sync_handlers: SyncHandlers = "loop",
         client_nav: bool = False,
+        live_session: bool = False,
     ) -> None:
         if handler_timeout is not None and handler_timeout <= 0:
             raise ValueError("handler_timeout must be a positive number of seconds or None")
@@ -91,6 +92,7 @@ class App:
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers
         self.client_nav = client_nav
+        self.live_session = live_session
         self.title = title
         self.api_docs = api_docs
         self.theme = get_theme(theme)

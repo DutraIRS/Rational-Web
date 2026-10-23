@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, MutableMapping
 from typing import Any, Generic, Protocol, TypeVar
@@ -31,6 +32,8 @@ class Session(MutableMapping[str, Any]):
         self.lock = asyncio.Lock()
         self.revision = 0
         self.rotated = False
+        # Page runtimes that want to hear about changes (live cross-tab sync); weak, so they can expire.
+        self.listeners: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def __getitem__(self, key: str) -> Any:
         track_read(("s", key))
@@ -52,6 +55,8 @@ class Session(MutableMapping[str, Any]):
 
     def bump(self) -> None:
         self.revision += 1
+        for listener in list(self.listeners):
+            listener.on_session_changed()
 
     @property
     def user(self) -> Any:
