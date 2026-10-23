@@ -59,7 +59,7 @@ dev = [
 ]
 browser = ["playwright>=1.44"]
 telemetry = ["opentelemetry-api>=1.25"]
-docs = ["sphinx>=7", "furo>=2024.1", "sphinx-autobuild>=2024.2"]
+docs = ["rational[db,testing]", "sphinx>=7", "furo>=2024.1", "sphinx-autobuild>=2024.2"]
 
 [tool.hatch.version]
 path = "src/rational/__init__.py"
