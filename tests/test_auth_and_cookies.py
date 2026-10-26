@@ -77,8 +77,8 @@ def test_signed_values_cannot_change_and_can_expire():
 
 def test_boxes_hide_and_protect_values():
     box = Box(SECRET)
-    sealed = box.seal({"card": "4242"})
-    assert "4242" not in sealed and box.open(sealed) == {"card": "4242"}
+    sealed = box.seal({"card": "4242 4242!"})
+    assert "4242!" not in sealed and box.open(sealed) == {"card": "4242 4242!"}
     assert box.seal("same") != box.seal("same")  # a fresh nonce each time
     for bad in (sealed[:-3] + "AAA", "short", Box("z" * 40).seal("x")):
         with pytest.raises(InvalidToken):
@@ -91,7 +91,7 @@ class Prefs(Service):
         cookies = self.context.cookies
         cookies.set("theme_choice", theme)
         cookies.set("cart", {"items": [1, 2]}, signed=True, max_age=3600)
-        cookies.set("vault", {"token": "s3"}, encrypted=True)
+        cookies.set("vault", {"token": "shh, secret!"}, encrypted=True)
 
     @remote(method="GET")
     def read(self) -> dict:
@@ -114,11 +114,11 @@ def test_app_cookies_plain_signed_and_encrypted():
     response = client.http.post("/api/prefs/remember", json={"theme": "dark"})
     header = response.headers.get_list("set-cookie")
     assert any(h.startswith("theme_choice=dark") and "HttpOnly" in h and "SameSite=lax" in h for h in header)
-    assert not any("s3" in h for h in header)  # the encrypted value is not readable
+    assert not any("secret!" in h for h in header)  # not readable; "!" never occurs in base64url
     assert client.http.get("/api/prefs/read").json() == {
         "theme": "dark",
         "cart": {"items": [1, 2]},
-        "vault": {"token": "s3"},
+        "vault": {"token": "shh, secret!"},
     }
 
     forged = TestClient(app).http.get("/api/prefs/read", headers={"Cookie": "cart=e30.tampered"})
