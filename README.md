@@ -57,8 +57,10 @@ there**:
 - **Server-rendered first.** Every page is real HTML before any script runs. Static pages ship
   zero JavaScript. Interactive pages load an 8 KiB (gzipped) runtime that wires events and
   morphs updated HTML into place, preserving focus and typing.
-- **Explicit boundaries.** Event handlers always run on the server. Only methods marked
-  `@remote` become an HTTP API. Nothing is callable from the browser by accident.
+- **Explicit boundaries.** Event handlers run on the server, unless you write a
+  `ClientComponent`: then the same Python is compiled to JavaScript and runs in the browser, with
+  no round trips. Only methods marked `@remote` become an HTTP API. Nothing is callable from the
+  browser by accident.
 - **Typed boundaries.** Path parameters, event payloads and API bodies are validated from your
   annotations by Pydantic. Invalid form input never reaches your handler and shows up next to
   the right field. Component prop annotations support static typing; runtime checks cover required
