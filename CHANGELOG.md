@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0a1] - 2026-10-26
+
+The 0.2 series starts here. Its features shipped first in 0.1.0a5 (below) and are large enough to
+need a new minor version: from here on, API changes come with a new minor version.
+
+- **Client components**: Python compiled to JavaScript, rendered first by the server.
+- **Reactivity**: `@computed`, `@watch`, two-way `bind`, `provide`/`inject`, view transitions.
+- **Batteries**: passwords, JSON Web Tokens, signing and encryption, cookies, a typed
+  `Repository`, `@app.socket` websockets with rooms.
+- **Sessions**: safe across workers (compare-and-swap with merge) and against fixation.
+- **Releases**: the version comes from the git tag.
+
+### Changed
+- Linux CI runs on `ubuntu-24.04` rather than `ubuntu-latest`, so runner upgrades cannot change or
+  stall the build (Ubuntu 26 package mirrors held Playwright installs for over ten minutes).
+- Docs deploy from `main` only, and a new deploy no longer cancels one in progress.
+
 ## [0.1.0a5] - 2026-10-26
 
 ### Added

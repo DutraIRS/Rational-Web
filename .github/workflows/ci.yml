@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   minimum-dependencies:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
         python: ["3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -38,7 +38,7 @@ jobs:
       - run: python -m pytest --ignore=tests/browser --cov
 
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -56,7 +56,7 @@ jobs:
       fail-fast: false
       matrix:
         engine: [chromium, firefox, webkit]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RATIONAL_BROWSER: ${{ matrix.engine }}
@@ -70,7 +70,7 @@ jobs:
       - run: python -m pytest tests/browser
 
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -88,7 +88,7 @@ jobs:
 
   javascript:
     # The browser runtime has no npm dependencies; ESLint runs from npx with a self-contained config.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
