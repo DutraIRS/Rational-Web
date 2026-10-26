@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   minimum-dependencies:
     runs-on: ubuntu-latest
@@ -79,11 +82,12 @@ jobs:
           cd /tmp && /tmp/smoke/bin/python -c "import rational; print(rational.__version__)"
 
   javascript:
+    # The browser runtime has no npm dependencies; ESLint runs from npx with a self-contained config.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm ci --no-audit --no-fund
-      - run: npm run lint:js
+      - run: for f in src/rational/static/*.js; do node --check "$f"; done
+      - run: npx --yes eslint@10.12.0 --max-warnings 0 src/rational/static

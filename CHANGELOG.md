@@ -80,6 +80,9 @@ All notable changes to this project are documented here. The format follows
   say), as it already did during a page render.
 - Badges use darker `success_text`, `warning_text` and `danger_text` theme tokens for AA contrast.
 - The style compiler's cache is a bounded LRU.
+- The repository has no npm files any more (`package.json`, lockfile, `node_modules`): CI checks the
+  browser runtime with `node --check` and `npx eslint@10.12.0` using a self-contained config.
+  GitHub workflow tokens are read-only by default.
 
 ### Fixed
 - A login in an event handler with a persistent session store answered with the old CSRF token, so
