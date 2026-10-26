@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Releases no longer install a browser: the browser tests run in CI on the same commit, and the
+  Playwright install depends on an Ubuntu package mirror that can stall for many minutes.
+
 ## [0.2.0a1] - 2026-10-26
 
 The 0.2 series starts here. Its features shipped first in 0.1.0a5 (below) and are large enough to
