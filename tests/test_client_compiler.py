@@ -16,7 +16,7 @@ from rational import Button, Column, Input, Row, State, Style, Text, h, js
 from rational.client import ClientCompileError, ClientComponent, compile_component
 from rational.client.templates import HandlerRef, Hole, HoleError, TraceFrame, placeholder, string_js, tracing
 from rational.styling.compiler import StyleCompiler
-from tests.clientapp import Counter, Echo, Item, Semantics, TodoList, Todos, make_app
+from tests.clientapp import Counter, Echo, Item, Semantics, Signup, TodoList, Todos, make_app
 
 BOLD = Style(font_weight=700)
 
@@ -113,7 +113,7 @@ def app():
     return make_app()  # registers the Todos service, so self.remote(Todos.add) resolves
 
 
-@pytest.mark.parametrize("cls", [Kitchen, Counter, Echo, Semantics, TodoList, Item])
+@pytest.mark.parametrize("cls", [Kitchen, Counter, Echo, Semantics, TodoList, Item, Signup])
 def test_every_construct_compiles_to_valid_javascript(app, cls, tmp_path):
     module = app.client_module(cls)
     assert module is not None and module.js.startswith('"use strict";\nrational.island(')

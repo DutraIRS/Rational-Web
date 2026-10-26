@@ -32,6 +32,7 @@ from .http import base_path
 from .rendering.builder import h, normalize_children
 from .rendering.html import to_html
 from .rendering.nodes import AttrValue, Node, RawHTML, TextNode
+from .state import call_watcher, values_equal
 from .styling.compiler import StyleSheet
 from .styling.style import merge
 
@@ -73,6 +74,9 @@ class PageRuntime:
         self.deps: dict[Cell, set[str]] = {}
         self.component_deps: dict[str, set[Cell]] = {}
         self.page_state: dict[str, Any] = {}
+        # @watch: cell -> [(component id, method, state name)], and calls waiting for the next flush.
+        self.watchers: dict[Cell, list[tuple[str, str, str]]] = {}
+        self.pending_watch: dict[tuple[str, str, str], Any] = {}  # first old value wins (batched)
         self.origin: tuple[str, dict[str, str]] | None = None  # route path and its params, for snapshots
         self.restore: dict[str, dict[str, Any]] = {}  # saved component state by path, applied while resuming
         self.dirty: set[str] = set()
@@ -104,6 +108,7 @@ class PageRuntime:
         node = await self._render_component(self.page, "page", None)
         self._remember(node)
         self.sync_session_revision()
+        self.pending_watch.clear()  # initial values are not changes
         return node
 
     def _assemble(self, node: Node, root: bool = True) -> Node:
@@ -249,7 +254,32 @@ class PageRuntime:
         result = comp.mount()
         if inspect.isawaitable(result):
             await result
+        self._register_watchers(comp)  # after mount: what mount sets is the starting point, not a change
         return comp
+
+    def _register_watchers(self, comp: Component) -> None:
+        for name, methods in type(comp)._rw_watchers.items():
+            cell = getattr(type(comp), name)._locate(comp)[2]
+            for method in methods:
+                self.watchers.setdefault(cell, []).append((str(comp.cid), method, name))
+
+    async def run_watchers(self) -> None:
+        """Call the @watch methods of state that changed, until they stop changing state."""
+        for _ in range(MAX_FLUSH_PASSES):
+            if not self.pending_watch:
+                return
+            batch, self.pending_watch = self.pending_watch, {}
+            for (cid, method, name), old in batch.items():
+                comp = self.components.get(cid)
+                if comp is None:
+                    continue
+                new = getattr(comp, name)
+                if values_equal(new, old):
+                    continue
+                result = call_watcher(getattr(comp, method), new, old)
+                if inspect.isawaitable(result):
+                    await result
+        raise RuntimeError("@watch methods keep changing the state they watch")
 
     async def _resolve(
         self, items: tuple[Any, ...], frame: Frame, counts: Counter[str], client: bool = False
@@ -319,10 +349,12 @@ class PageRuntime:
         self.deps.setdefault(cell, set()).add(cid)
         self.component_deps.setdefault(cid, set()).add(cell)
 
-    def state_changed(self, cell: Cell) -> None:
+    def state_changed(self, cell: Cell, old: Any = None) -> None:
         if current_frame.get() is not None:
             raise RuntimeError("state must not be assigned during render(); do it in an event handler or mount()")
         self.dirty.update(self.deps.get(cell, ()))
+        for watcher in self.watchers.get(cell, ()):
+            self.pending_watch.setdefault(watcher, old)
         if self.tasks:
             self.schedule_push()
 
@@ -505,6 +537,8 @@ class PageRuntime:
         if comp.path is not None and self.paths.get(comp.path) == cid:
             del self.paths[comp.path]
         self.dirty.discard(cid)
+        for cell, entries in list(self.watchers.items()):
+            self.watchers[cell] = [w for w in entries if w[0] != cid]
         for task, owner in list(self.tasks.items()):
             if owner == cid:
                 task.cancel()
@@ -527,6 +561,7 @@ class PageRuntime:
 
     async def flush(self) -> list[dict[str, Any]]:
         """Rerender dirty components (outermost first) into morph patches."""
+        await self.run_watchers()
         self.refresh_session_state()
         patches: list[dict[str, Any]] = []
         for _ in range(MAX_FLUSH_PASSES):

@@ -9,9 +9,10 @@ import sys
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
+from ._tracking import changed
 from .events import ClientOp
 from .http import is_local_path
-from .state import State
+from .state import Binding, State, values_equal
 
 if TYPE_CHECKING:
     from .app import App
@@ -55,6 +56,7 @@ class Component:
     """
 
     _rw_props: ClassVar[dict[str, Any]] = {}
+    _rw_watchers: ClassVar[dict[str, list[str]]] = {}
     _rw_client: ClassVar[bool] = False  # True for ClientComponent: rendered and run in the browser
     resumable: ClassVar[bool] = True  # False: this component's state is not saved in page snapshots
 
@@ -74,6 +76,13 @@ class Component:
                 continue
             props[name] = default
         cls._rw_props = props
+        watchers: dict[str, list[str]] = {k: list(v) for k, v in cls._rw_watchers.items()}
+        for attr, value in vars(cls).items():
+            for state_name in getattr(value, "_rw_watch", ()):
+                if not isinstance(getattr(cls, state_name, None), State):
+                    raise TypeError(f"{cls.__name__}.{attr}: @watch({state_name!r}) needs a State attribute")
+                watchers.setdefault(state_name, []).append(attr)
+        cls._rw_watchers = watchers
 
     def __init__(self, *children: Any, key: str | int | None = None, style: Style | None = None, **props: Any) -> None:
         self._rw_uid = next(_uids)
@@ -124,6 +133,31 @@ class Component:
         """An instance of ``service`` bound to the current request context."""
         return service(self.context)
 
+    def bind(self, name: str) -> Binding:
+        """Tie a form control to State ``name`` both ways: ``Input("Name", bind=self.bind("name"))``."""
+        return Binding(self, name)
+
+    def provide(self, key: str, value: Any) -> None:
+        """Make ``value`` available to every component rendered inside this one (``self.inject(key)``).
+
+        Call it in ``mount()`` or at the start of ``render()``. To share changing data, provide a
+        component (or any object with State) rather than a plain value.
+        """
+        self.__dict__.setdefault("_rw_provided", {})[key] = value
+
+    def inject(self, key: str, default: Any = _REQUIRED) -> Any:
+        """The value the nearest enclosing component provided under ``key``."""
+        runtime = self._require_runtime()
+        cid = runtime.parent.get(str(self.cid))
+        while cid is not None:
+            provided = runtime.components[cid].__dict__.get("_rw_provided")
+            if provided is not None and key in provided:
+                return provided[key]
+            cid = runtime.parent.get(cid)
+        if default is _REQUIRED:
+            raise LookupError(f"no component above {type(self).__name__} provides {key!r}")
+        return default
+
     def touch(self, *names: str) -> None:
         """Mark state as changed after mutating it in place."""
         for name in names:
@@ -159,6 +193,8 @@ class Component:
         """Take props from a freshly constructed twin, keeping state and identity."""
         for name in self._rw_props:
             if name in fresh.__dict__:
+                if not values_equal(getattr(self, name, None), fresh.__dict__[name]):
+                    changed()  # computed values may depend on props
                 setattr(self, name, fresh.__dict__[name])
         self.children = fresh.children
         self.style = fresh.style

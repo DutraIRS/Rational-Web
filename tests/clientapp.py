@@ -3,7 +3,21 @@
 import asyncio
 from collections.abc import Callable
 
-from rational import App, Button, Checkbox, Column, Component, Input, Page, RemoteError, Row, State, Text
+from rational import (
+    App,
+    Button,
+    Checkbox,
+    Column,
+    Component,
+    Input,
+    Page,
+    RemoteError,
+    Row,
+    State,
+    Text,
+    computed,
+    watch,
+)
 from rational.backend import Service, remote
 from rational.client import ClientComponent
 
@@ -233,9 +247,38 @@ class Semantics(ClientComponent):
         return Column(*[Text(repr(r), key=i) for i, r in enumerate(results)])
 
 
+class Signup(ClientComponent):
+    """Two-way binding, a computed value and a watcher, all in the browser."""
+
+    name = State("")
+    age = State(0)
+    changes = State(factory=list)
+
+    @computed
+    def greeting(self):
+        return f"Hi {self.name.title() or 'there'} ({self.age})"
+
+    @watch("age")
+    def aged(self, new, old):
+        self.changes = [*self.changes, f"{old}->{new}"]
+
+    def render(self):
+        return Column(
+            Input("Your name", bind=self.bind("name")),
+            Input("Your age", type="number", bind=self.bind("age")),
+            Text(self.greeting),
+            Text(f"Changes: {', '.join(self.changes)}"),
+        )
+
+
 def make_app():
     app = App()
     app.service(Todos)
+
+    @app.page("/signup")
+    class SignupPage(Page):
+        def render(self):
+            return Signup()
 
     @app.page("/todos")
     class TodosPage(Page):

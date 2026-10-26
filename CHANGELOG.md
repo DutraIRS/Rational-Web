@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Reactivity: `@computed` (derived values cached until their state changes, with correct dependencies
+  for every reader), `@watch("name")` (batched, sync or async reactions that run before re-rendering),
+  `bind=self.bind("name")` two-way binding on `Input`, `Textarea`, `Select` and `Checkbox` (typed,
+  ignores input that is not valid yet), and `self.provide()` / `self.inject()`. All but provide/inject
+  also work in client components.
+- `App(view_transitions=True)` animates page changes (cross-document and client navigation).
+- Docs: a capability map for developers coming from Vue.
 - Client components: `ClientComponent` subclasses are written in a checked subset of Python and
   compiled to JavaScript, so their event handlers run in the browser with no request. The server
   renders them first (real HTML before any script), then the browser hydrates them. They support

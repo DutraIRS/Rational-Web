@@ -147,3 +147,63 @@ What to read next
 * :doc:`examples/index` — the ``todos`` and ``social-network`` walkthroughs read well for a
   second pass; ``marketplace`` shows sessions and transactions.
 * :doc:`design` — the full decision record (updates, transport, identity) if you want the why.
+
+Everything a Vue app does, and how it is done here
+--------------------------------------------------
+
+The capabilities are the same; the shape is Python's: classes, decorators and typed values instead of
+templates and options objects.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Capability (Vue)
+     - Rational Web
+   * - Reactive state (``ref``, ``reactive``)
+     - ``State(...)`` attributes; per component, page or session.
+   * - Derived state (``computed``)
+     - ``@computed`` methods, cached until their state changes.
+   * - Reactions (``watch``)
+     - ``@watch("name")`` methods, batched, sync or async.
+   * - Props and events up (``emit``)
+     - Annotated props; pass a method as a prop (``on_select=self.select``) to call the parent.
+   * - Slots
+     - ``self.children``.
+   * - Two-way binding (``v-model``)
+     - ``bind=self.bind("name")`` on ``Input``, ``Textarea``, ``Select``, ``Checkbox``.
+   * - ``provide`` / ``inject``
+     - ``self.provide(key, value)`` / ``self.inject(key)``.
+   * - Lifecycle hooks
+     - ``mount()``, ``unmount()``; ``hydrated()`` in client components.
+   * - ``v-if``, ``v-for``, ``key``
+     - Python ``if`` and comprehensions; ``key=`` on elements and components.
+   * - Single-file components, scoped CSS
+     - Component classes; ``Style`` values compile to hashed classes.
+   * - Client-side rendering
+     - :doc:`client-components`: Python compiled to JavaScript, rendered by the server first.
+   * - SSR and hydration
+     - The default: every page is server-rendered HTML; client components hydrate.
+   * - Router, guards, navigation
+     - ``@app.page("/path/{id}")``, ``auth="required"``, ``Redirect``, ``self.navigate()``,
+       ``App(client_nav=True)`` for in-place navigation.
+   * - ``Transition``
+     - CSS transitions in ``Style``; ``App(view_transitions=True)`` animates page changes.
+   * - ``Teleport``
+     - ``Modal`` uses the native ``<dialog>`` top layer; menus and toasts are positioned by CSS.
+   * - ``Suspense``, async components
+     - ``Suspense``; ``async def mount()`` and ``async def render()``.
+   * - Store (Pinia)
+     - ``State(scope="page")`` / ``State(scope="session")``, services for shared data,
+       live session sync across tabs and workers.
+   * - Custom directives
+     - ``js.*`` browser operations, or a client component.
+   * - TypeScript
+     - Type hints, checked by mypy; payloads and API bodies validated at runtime.
+   * - Devtools
+     - Readable error pages and overlays in ``--dev``; ``rational.testing`` for inspection. There is
+       no component inspector extension.
+   * - Hot module replacement
+     - ``--dev`` restarts the app and reloads the page on save; component state is not preserved.
+   * - ``KeepAlive``
+     - Not needed for most uses: keep state that must outlive a component in page or session scope.

@@ -61,6 +61,38 @@ value marks every dependent component for re-render after the event. In-place mu
 is not detected: reassign (``self.items = [*self.items, x]``) or call
 ``self.touch("items")``.
 
+Derived state, reactions and binding
+------------------------------------
+
+``@computed`` turns a method into a value read like an attribute. It is cached until state changes,
+and whoever reads it re-renders when the state it was computed from changes::
+
+    @computed
+    def total(self) -> int:
+        return sum(item.price for item in self.items)
+
+``@watch("name", ...)`` runs a method after those ``State`` attributes change, before the page
+re-renders. It receives ``(new, old)`` (or just ``new``, or nothing), may be async, and changes made
+in one handler are batched into one call. Values set in ``mount()`` are the starting point, not changes::
+
+    @watch("query")
+    async def search(self, new: str) -> None:
+        self.results = await self.use(SearchService).find(new)
+
+``bind=self.bind("name")`` ties a form control to a ``State`` attribute both ways: the control shows
+the value, and what the user enters is converted to the attribute's type (``int``, ``float``,
+``bool``, ``str``) and stored. Input that is not valid yet is ignored. ``Input``, ``Textarea``,
+``Select`` and ``Checkbox`` accept it::
+
+    Input("Age", type="number", bind=self.bind("age"))
+
+``self.provide(key, value)`` (in ``mount()`` or ``render()``) makes a value available to every
+component inside this one, which read it with ``self.inject(key, default)``. To share changing data,
+provide a component or an object with ``State``.
+
+All of these work the same in :doc:`client components <client-components>`, except
+``provide``/``inject`` (pass props there).
+
 Identity
 --------
 
@@ -150,7 +182,8 @@ The full set, each taking an optional ``target`` selector (default: the element 
 * dialogs: ``open_dialog`` and ``close_dialog`` (a native ``<dialog>``, closing the nearest one by default)
 * ``focus``, ``confirm``, ``optimistic``, ``set_theme``, ``toggle_theme``
 
-They are not a Python-to-JavaScript compiler. The server only patches what changed, so a client-side
+For logic that runs in the browser, write a :doc:`client component <client-components>`. The server
+only patches what changed, so a client-side
 change survives re-renders that don't touch the same attribute or text; if the server does change
 it (or replaces the element), the server wins.
 

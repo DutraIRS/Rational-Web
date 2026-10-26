@@ -93,6 +93,7 @@ class App:
         handler_timeout: float | None = None,
         sync_handlers: SyncHandlers = "loop",
         client_nav: bool = False,
+        view_transitions: bool = False,
         live_session: bool = False,
         api_only: bool = False,
         cors_origins: Sequence[str] = (),
@@ -124,6 +125,7 @@ class App:
         self.handler_timeout = handler_timeout
         self.sync_handlers = sync_handlers
         self.client_nav = client_nav
+        self.view_transitions = view_transitions
         self.live_session = live_session
         self.title = title
         self.api_docs = api_docs
@@ -170,6 +172,8 @@ class App:
         self.db: Database | None = database
 
         self.theme_css = self.theme.css(theme_mode)
+        if view_transitions:  # animated page changes: full loads (supporting browsers) and client navigation
+            self.theme_css += "@view-transition{navigation:auto}"
         self.theme_href = f"/_rational/theme.css?v={_digest(self.theme_css)}"
         static = resources.files("rational").joinpath("static")
         self.runtime_js = static.joinpath("runtime.js").read_text("utf-8")

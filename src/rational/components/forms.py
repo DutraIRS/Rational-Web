@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._tracking import dom_id
 from ..rendering.builder import EventValue, h
 from ..rendering.nodes import Node
 from ..styling.style import Style, merge
+
+if TYPE_CHECKING:
+    from ..state import Binding
 
 FORM = Style(layout="vertical", gap="md")
 FIELD = Style(layout="vertical", gap=6, min_width=0)
@@ -44,6 +47,13 @@ CHECK_ROW = Style(display="inline-flex", align="center", gap="sm", cursor="point
 CHECKBOX = Style(width=18, height=18, margin=0, raw={"accent-color": "var(--rw-color-primary)"})
 
 _NAME_RE = re.compile(r"[^a-zA-Z0-9_]+")
+
+
+def _bound(bind: Binding, handler: EventValue, event: str) -> tuple[Any, EventValue]:
+    """The value to show and the handler to install for ``bind=``."""
+    if handler is not None:
+        raise TypeError(f"pass bind= or {event}=, not both")
+    return bind.value, bind.set
 
 
 def _name_from(label: str) -> str:
@@ -125,11 +135,14 @@ def Input(  # noqa: N802
     on_input: EventValue = None,
     on_change: EventValue = None,
     on_enter: EventValue = None,
+    bind: Binding | None = None,
     style: Style | None = None,
     key: str | int | None = None,
     **attrs: Any,
 ) -> Node:
     """A labelled text-like input. ``on_input`` handlers receive the value (debounced)."""
+    if bind is not None:
+        value, on_input = _bound(bind, on_input, "on_input")
     name = name or _name_from(label)
     control_id = dom_id(name)
     control = h(
@@ -165,10 +178,13 @@ def Textarea(  # noqa: N802
     hide_label: bool = False,
     on_input: EventValue = None,
     on_change: EventValue = None,
+    bind: Binding | None = None,
     style: Style | None = None,
     key: str | int | None = None,
     **attrs: Any,
 ) -> Node:
+    if bind is not None:
+        value, on_input = _bound(bind, on_input, "on_input")
     name = name or _name_from(label)
     control_id = dom_id(name)
     control = h(
@@ -199,11 +215,14 @@ def Select(  # noqa: N802
     error: str | None = None,
     hide_label: bool = False,
     on_change: EventValue = None,
+    bind: Binding | None = None,
     style: Style | None = None,
     key: str | int | None = None,
     **attrs: Any,
 ) -> Node:
     """``options`` are values or ``(value, label)`` pairs."""
+    if bind is not None:
+        value, on_change = _bound(bind, on_change, "on_change")
     name = name or _name_from(label)
     control_id = dom_id(name)
     option_nodes = []
@@ -233,11 +252,14 @@ def Checkbox(  # noqa: N802
     help: str | None = None,  # noqa: A002
     error: str | None = None,
     on_change: EventValue = None,
+    bind: Binding | None = None,
     style: Style | None = None,
     key: str | int | None = None,
     **attrs: Any,
 ) -> Node:
     """``on_change`` handlers receive ``True``/``False``."""
+    if bind is not None:
+        checked, on_change = _bound(bind, on_change, "on_change")
     name = name or _name_from(label)
     control_id = dom_id(name)
     box = h(

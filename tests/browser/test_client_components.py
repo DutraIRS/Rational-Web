@@ -89,3 +89,20 @@ def test_remote_calls_nested_components_and_server_children(browser, live):
     playwright.expect(page.get_by_role("checkbox", name="Buy Milk")).to_be_checked()  # island state survived
     assert page.evaluate("window.__rw_errors") == []
     assert [e for e in errors if "status of 400" not in e] == [], errors  # the refused add is the only 400
+
+
+def test_binding_computed_values_and_watchers_in_the_browser(browser, live):
+    page = browser.new_page()
+    errors = collect_errors(page)
+    page.add_init_script(ISLAND_ERRORS)
+    events = []
+    page.on("request", lambda r: events.append(r.url) if "/_rational/event" in r.url else None)
+    page.goto(live + "/signup")
+    page.wait_for_function("document.querySelector('rw-island').__rw")
+    page.get_by_text("Hi There (0)").wait_for()
+    page.get_by_label("Your name").press_sequentially("ada lovelace", delay=10)
+    page.get_by_text("Hi Ada Lovelace (0)").wait_for()
+    page.get_by_label("Your age").fill("36")
+    page.get_by_text("Hi Ada Lovelace (36)").wait_for()
+    page.get_by_text("Changes: 0->36").wait_for()
+    assert events == [] and page.evaluate("window.__rw_errors") == [] and errors == []

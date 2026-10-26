@@ -58,7 +58,7 @@ from .i18n import I18n
 from .logging import Logging
 from .rendering import h, unsafe_html
 from .router import Router
-from .state import State
+from .state import Binding, State, computed, watch
 from .stores import PersistentSessionStore, RedisSessionDriver
 from .styling import Breakpoint, Style, Theme
 
@@ -72,6 +72,7 @@ __all__ = [
     "Aside",
     "Avatar",
     "Badge",
+    "Binding",
     "Breakpoint",
     "Bus",
     "Button",
@@ -130,6 +131,7 @@ __all__ = [
     "Toasts",
     "Unauthorized",
     "bootstrap",
+    "computed",
     "cx",
     "h",
     "js",
@@ -139,4 +141,5 @@ __all__ = [
     "threaded",
     "timeout",
     "unsafe_html",
+    "watch",
 ]

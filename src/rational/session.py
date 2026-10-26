@@ -14,7 +14,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, MutableMapping
 from typing import Any, Generic, Protocol, TypeVar
 
-from ._tracking import track_read
+from ._tracking import changed, track_read
 
 USER_KEY = "rw.user"
 
@@ -61,6 +61,7 @@ class Session(MutableMapping[str, Any]):
 
     def bump(self) -> None:
         self.revision += 1
+        changed()
         for listener in list(self.listeners):
             listener.on_session_changed()
 

@@ -147,6 +147,7 @@ class PageRoute:
                 "api": base + app.api_prefix,
                 "base": base,
                 "nav": app.client_nav,
+                "transitions": app.view_transitions,
                 "debug": app.debug,
             }
         elif app.client_nav or runtime.islands:
@@ -155,6 +156,7 @@ class PageRoute:
             manifest = {
                 "v": PROTOCOL_VERSION,
                 "nav": app.client_nav,
+                "transitions": app.view_transitions,
                 "base": base,
                 "api": base + app.api_prefix,
                 "csrf": current.csrf if current is not None else None,

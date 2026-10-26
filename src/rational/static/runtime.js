@@ -563,7 +563,8 @@
       if (!(res.headers.get("Content-Type") || "").includes("text/html")) throw new Error("not a page");
       const doc = new DOMParser().parseFromString(await res.text(), "text/html");
       if (abort.signal.aborted) return;
-      swap(doc, res.url || url, push);
+      const apply = () => swap(doc, res.url || url, push);
+      if (M.transitions && document.startViewTransition) document.startViewTransition(apply); else apply();
     } catch (err) {
       if (abort.signal.aborted) return;
       if (M.debug) console.warn("[rational] client navigation failed, loading normally:", err);

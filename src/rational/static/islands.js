@@ -654,6 +654,7 @@
   function render(c) {
     c.queued = false;
     if (!c.el.isConnected) { dispose(c); return; }
+    if (!runWatchers(c)) return;
     c.handlers = [];
     c.ids = 0;
     c.kids = 0;
@@ -664,6 +665,22 @@
     build(tree, next, c.el.namespaceURI === SVG ? SVG : null);
     R._morphChildren(c.el, next);
     hydrateWithin(c.el);
+  }
+
+  // @watch methods run before the render that shows their state; they may change more state.
+  function runWatchers(c) {
+    for (let pass = 0; pass < 8; pass++) {
+      if (!c.pending.size) return true;
+      const batch = Array.from(c.pending);
+      c.pending.clear();
+      for (const [key, old] of batch) {
+        const value = c.s[key];
+        if (eq(value, old)) continue;
+        for (const fn of c.def.watch[key]) run(c, () => fn(c, value, old));
+      }
+    }
+    report(c, error("RuntimeError", "@watch methods keep changing the state they watch"));
+    return false;
   }
 
   function dispose(c) {
@@ -687,8 +704,15 @@
       cls: init ? init.cls : el.getAttribute("data-rw-class"),
     };
     const state = Object.assign(def.init(), fromServer ? JSON.parse(el.getAttribute("data-rw-state")) : {});
+    c.pending = new Map();  // watched state that changed: key -> first old value
     c.s = new Proxy(state, {
-      set(target, key, value) { target[key] = value; schedule(c); return true; },
+      set(target, key, value) {
+        const old = target[key];
+        target[key] = value;
+        if (def.watch[key] && !c.pending.has(key) && !eq(old, value)) c.pending.set(key, old);
+        schedule(c);
+        return true;
+      },
       deleteProperty(target, key) { delete target[key]; schedule(c); return true; },
     });
     el.__rw = c;
@@ -759,6 +783,10 @@
     and: (a, rest) => (truthy(a) ? rest() : a),
     or: (a, rest) => (truthy(a) ? a : rest()),
     cls: (...parts) => parts.filter((p) => typeof p === "string" && p).join(" "),
+    bindset: (c, key, value, kind) => {
+      try { c.s[key] = kind ? convert(value, kind) : value; } catch (err) { if (!(err instanceof PyError)) throw err; }
+      return null;
+    },
     on: (c, fn) => `${c.uid}:${c.handlers.push(fn) - 1}`,
     id: (c, slug) => `${c.uid}-${slug}-${++c.ids}`,
     island: (c, key, props, slot, k, cls) => {

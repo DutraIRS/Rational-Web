@@ -27,13 +27,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import FunctionType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..component import Component
 from ..events import ClientOp
 from ..rendering.builder import h
 from ..rendering.nodes import Node, RawHTML, TextNode, is_url_attribute
-from ..state import MISSING, State
+from ..state import MISSING, State, computed
 from ..styling.style import Style
 from .templates import HandlerRef, Hole, HoleError, TraceFrame, has_placeholder, string_js, tracing
 
@@ -230,7 +230,7 @@ _ORDER = {ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">="}
 
 # Methods every client component has, and what they become in the browser.
 _OWN = frozenset({"remote", "navigate", "run_js", "touch"})
-_SERVER_ONLY = frozenset({"context", "app", "use", "t", "run_task", "request"})
+_SERVER_ONLY = frozenset({"context", "app", "use", "t", "run_task", "request", "provide", "inject"})
 
 
 class ClientCompileError(TypeError):
@@ -376,6 +376,13 @@ class _Module:
         self.props = list(cls._rw_props)
         self.states = self._states()
         self.methods = self._methods()
+        self.computed = {
+            name: value.fn
+            for klass in reversed(cls.__mro__)
+            for name, value in vars(klass).items()
+            if isinstance(value, computed)
+        }
+        self.computed_names: dict[str, str] = {}
         self.functions: dict[str, str] = {}  # js name -> source, in first-use order
         self.method_names: dict[str, str] = {}
         self.helper_names: dict[FunctionType, str] = {}
@@ -425,6 +432,19 @@ class _Module:
                 raise
         return js
 
+    def getter(self, name: str) -> str:
+        """The JavaScript name of ``@computed`` ``name`` (recomputed on each read in the browser)."""
+        js = self.computed_names.get(name)
+        if js is None:
+            js = self.computed_names[name] = f"$g_{name}"
+            try:
+                getter = cast(FunctionType, self.computed[name])
+                self.functions[js] = _Function(self, getter, js, method=True).compile()
+            except BaseException:
+                del self.computed_names[name]
+                raise
+        return js
+
     def helper(self, fn: FunctionType) -> str:
         """A module-level function called from client code, compiled to JavaScript too."""
         js = self.helper_names.get(fn)
@@ -455,9 +475,13 @@ class _Module:
             except ClientCompileError as e:
                 mount_error = str(e)
         hydrated = self.method("hydrated") if "hydrated" in self.methods else "null"
+        watchers = getattr(self.cls, "_rw_watchers", {})
+        watch = ", ".join(
+            f"{json.dumps(name)}: [{', '.join(self.method(m) for m in methods)}]" for name, methods in watchers.items()
+        )
         definition = (
             f"{{props: {json.dumps(self.props)}, init: () => ({json.dumps(self.states)}), "
-            f"render: {render}, mount: {mount}, hydrated: {hydrated}}}"
+            f"render: {render}, mount: {mount}, hydrated: {hydrated}, watch: {{{watch}}}}}"
         )
         body = "\n".join(self.functions.values())
         js = f'"use strict";\nrational.island({json.dumps(self.key)}, ($rt) => {{\n{body}\nreturn {definition};\n}});\n'
@@ -931,6 +955,8 @@ class _Function:
             return f"$c.p.{name}"
         if name == "children":
             return "$c.slot"
+        if name in module.computed:
+            return f"{module.getter(name)}($c)"
         if name in module.methods:
             fn = module.method(name)
             return f"((...a) => {fn}($c, ...a))"
@@ -1280,6 +1306,13 @@ class _Function:
         label = ast.unparse(node)
         if self.is_static(node):
             return self.evaluate(node)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and self.is_self(node.func.value)
+            and node.func.attr == "bind"
+        ):
+            return self.bound_control(node, frame)
         if isinstance(node, ast.IfExp) and self.is_static(node.body) and self.is_static(node.orelse):
             values = [self.evaluate(node.body), self.evaluate(node.orelse)]
             test = frame.temp("a")
@@ -1295,6 +1328,21 @@ class _Function:
             items = [self.argument(e, frame, choices) for e in node.elts]
             return items if isinstance(node, ast.List) else tuple(items)
         return frame.hole(self.expr(node), label)
+
+    def bound_control(self, node: ast.Call, frame: TraceFrame) -> Any:
+        """``self.bind("name")`` as a form control argument: its value, and a handler storing input."""
+        if len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or node.keywords:
+            raise self.error(node, 'bind() takes the name of a State attribute: self.bind("name")')
+        name = str(node.args[0].value)
+        if name not in self.module.states:
+            raise self.error(node, f"{self.module.cls.__name__}.{name} is not a State attribute; bind() needs one")
+        initial = self.module.states[name]
+        kind = next(
+            (k for t, k in ((bool, "bool"), (int, "int"), (float, "float"), (str, "str")) if isinstance(initial, t)), ""
+        )
+        value = frame.hole(f"$c.s.{name}", f"self.{name}")
+        handler = HandlerRef(f"((v) => $rt.bindset($c, {json.dumps(name)}, v, {json.dumps(kind)}))")
+        return _Bound(value, handler)
 
     def handlers(self, node: ast.expr) -> Any:
         """An ``on_<event>=`` value: handlers, ``js.*`` operations, or a list of both."""
@@ -1448,3 +1496,13 @@ def _is_op(fn: Any) -> bool:
 _PURE: frozenset[Any] = frozenset(
     {len, str, int, float, bool, abs, round, min, max, sum, sorted, list, tuple, dict, range, enumerate, zip, any, all}
 )
+
+
+class _Bound:
+    """What a traced primitive sees for ``bind=``: ``value`` to show and ``set`` to call on input."""
+
+    __slots__ = ("set", "value")
+
+    def __init__(self, value: Hole, handler: HandlerRef) -> None:
+        self.value = value
+        self.set = handler
