@@ -34,6 +34,7 @@ $ python -m sphinx -W -b html docs docs/_build/html
 ## Releasing (maintainers)
 
 1. Move *Unreleased* entries in `CHANGELOG.md` under the new version and commit.
-2. Tag `vX.Y.Z` and push the tag. The version comes from the tag (there is no version number to
-   edit); the *Release* workflow builds, checks, and publishes to PyPI through trusted publishing,
-   and the docs are rebuilt with that version.
+2. Tag `vX.Y.Z` and push the commit and tag together: `git push --atomic origin main vX.Y.Z`.
+   The version comes from the tag (there is no version number to edit). The *Release* workflow
+   builds, checks, and, once a maintainer approves the `pypi` environment, publishes to PyPI
+   through trusted publishing; the docs are rebuilt from `main` with that version.
