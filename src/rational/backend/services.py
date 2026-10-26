@@ -137,7 +137,7 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
         session = ctx.peek_session()
         if spec.method != "GET" and session is not None and not csrf_ok(request, session):
             response = json_error(403, "csrf", "Invalid CSRF token")
-            app.finish(request, response, ctx)
+            await app.finish(request, response, ctx)
             return response
         if body_model is not None:
             body = kwargs.pop("body")
@@ -154,14 +154,14 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
                 )
             except RationalError as e:
                 error_response = json_error(e.status, e.code, e.message, details=e.details)
-                app.finish(request, error_response, ctx)
+                await app.finish(request, error_response, ctx)
                 return error_response
             except Exception:
                 log.exception("error in remote %s.%s", cls.__name__, name)
                 error_response = json_error(500, "internal", "Something went wrong")
-                app.finish(request, error_response, ctx)
+                await app.finish(request, error_response, ctx)
                 return error_response
-            app.finish(request, response, ctx)
+            await app.finish(request, response, ctx)
             return result
 
     endpoint.__signature__ = inspect.Signature([*context_params, *arg_params])  # type: ignore[attr-defined]

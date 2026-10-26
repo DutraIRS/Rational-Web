@@ -26,7 +26,8 @@ EVENT_NAMES = frozenset({"click", "input", "change", "submit", "keydown", "enter
 _TAG_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
 _ATTR_RE = re.compile(r"^[a-zA-Z_:][-a-zA-Z0-9_:.]*$")
 _FORBIDDEN_TAGS = frozenset({"script", "style"})
-_URL_ATTRS = frozenset({"href", "src", "action", "formaction", "poster", "cite", "xlink:href"})
+_FORBIDDEN_ATTRS = frozenset({"srcdoc"})
+_URL_ATTRS = frozenset({"href", "src", "action", "formaction", "poster", "cite", "data", "xlink:href"})
 _UNSAFE_SCHEMES = ("javascript:", "vbscript:", "data:")
 _CONTROL_RE = re.compile(r"[\x00-\x20\x7f]+")
 
@@ -84,6 +85,7 @@ def validate_tag(tag: str) -> None:
 
 
 def validate_attr(name: str, value: AttrValue) -> None:
+    """Reject attribute names and values that could run script (``on*``, ``srcdoc``, ``javascript:`` URLs)."""
     if _is_url_attr(name) and isinstance(value, str):
         check_url(value)
 
@@ -93,9 +95,12 @@ def _is_url_attr(name: str) -> bool:
     """Validate an attribute *name* (cached) and report whether its value is a URL."""
     if not _ATTR_RE.match(name):
         raise UnsafeMarkupError(f"invalid attribute name {name!r}")
-    if name.lower().startswith("on"):
+    lowered = name.lower()
+    if lowered.startswith("on"):
         raise UnsafeMarkupError(f"inline handler attribute {name!r} is not allowed; pass on_<event>=handler instead")
-    return name.lower() in _URL_ATTRS
+    if lowered in _FORBIDDEN_ATTRS:
+        raise UnsafeMarkupError(f"attribute {name!r} can carry script; use unsafe_html() deliberately")
+    return lowered in _URL_ATTRS
 
 
 def check_url(value: str) -> None:

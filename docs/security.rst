@@ -5,8 +5,9 @@ Rational Web keeps the network boundary explicit and secure by default.
 
 Output
    All text and attribute values are escaped. Tag and attribute names are validated;
-   ``<script>``/``<style>`` elements, inline ``on*=`` attributes and ``javascript:``,
-   ``vbscript:`` and non-image ``data:`` URLs are rejected. ``unsafe_html()`` is the only
+   ``<script>``/``<style>`` elements, the ``srcdoc`` attribute, inline ``on*=`` attributes
+   and ``javascript:``, ``vbscript:`` and non-image ``data:`` URLs are rejected — both on
+   rendered elements and in ``js.set_attr``/``js.toggle_attr``. ``unsafe_html()`` is the only
    way to emit raw markup. CSS values cannot contain ``; { } < >`` or comments.
 
 Events
@@ -20,7 +21,15 @@ Events
 Sessions
    The browser only holds an opaque random id (``HttpOnly``, ``SameSite=Lax``, ``Secure``
    over HTTPS). ``session.login()`` and ``session.logout()`` rotate the id and the CSRF
-   token. Page views expire after 30 idle minutes and are bounded in number.
+   token, even when the request then fails, and nothing is ever stored under the old id
+   after a login. With a persistent store, a logout on one worker ends the session on all of
+   them. Page views expire after 30 idle minutes and are bounded in number.
+
+Redirects
+   ``Redirect`` refuses ``javascript:``, ``vbscript:`` and ``data:`` targets, and
+   ``self.navigate()`` only accepts paths on the site. Pass any target taken from the request
+   (a ``?next=`` parameter) through :func:`rational.local_path`, which also refuses the
+   ``//host``, ``/\host`` and whitespace forms that browsers turn into another origin.
 
 Remote API
    Nothing is exposed unless decorated with ``@remote``. Inputs and outputs are

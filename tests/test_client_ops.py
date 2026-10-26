@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from rational import js
 
 
@@ -14,8 +16,6 @@ def test_new_client_ops_serialize_target_first():
 
 
 def test_optimistic_wraps_operations_and_rejects_unsafe_ones():
-    import pytest
-
     op = js.optimistic(js.set_text("x", "#a"), js.hide())
     assert op.op == "optimistic"
     assert json.loads(op.args[1]) == [["set_text", "#a", "x"], ["hide", None]]
@@ -23,3 +23,9 @@ def test_optimistic_wraps_operations_and_rejects_unsafe_ones():
         js.optimistic()
     with pytest.raises(ValueError):
         js.optimistic(js.confirm("sure?"))
+
+
+def test_theme_mode_is_checked():
+    assert js.set_theme("dark").to_json() == ["set_theme", None, "dark"]
+    with pytest.raises(ValueError):
+        js.set_theme("dark; domain=example.com")  # type: ignore[arg-type]

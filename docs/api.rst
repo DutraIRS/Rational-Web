@@ -86,11 +86,13 @@ Sessions
 .. automodule:: rational.stores
    :members: PersistentSessionStore, RedisSessionDriver, MemorySessionDriver, SessionDriver
 
-Errors
-------
+Errors and redirects
+--------------------
 
 .. automodule:: rational.errors
    :members:
+
+.. autofunction:: rational.local_path
 
 Concurrency
 -----------

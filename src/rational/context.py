@@ -11,7 +11,9 @@ if TYPE_CHECKING:
     from .backend.database import Database
     from .session import Session
 
+from ._tracking import track_read
 from .i18n import LANG_COOKIE
+from .session import USER_KEY
 
 _UNRESOLVED: Any = object()
 
@@ -72,7 +74,10 @@ class Context:
         if self._user is not _UNRESOLVED:
             return self._user
         session = self._session
-        return None if session is None else session.user
+        if session is None:
+            track_read(("s", USER_KEY))  # a later login creates the session: re-render then
+            return None
+        return session.user
 
     def set_user(self, user: Any) -> None:
         """Used by custom authenticators (``App.authenticator``)."""

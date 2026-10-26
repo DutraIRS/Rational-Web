@@ -1,4 +1,19 @@
-from rational import Avatar, Button, Card, Column, Form, Grid, Heading, Input, Page, Router, State, Style, Text
+from rational import (
+    Avatar,
+    Button,
+    Card,
+    Column,
+    Form,
+    Grid,
+    Heading,
+    Input,
+    Page,
+    Router,
+    State,
+    Style,
+    Text,
+    local_path,
+)
 
 from models import JoinForm
 from services import SocialService
@@ -6,10 +21,6 @@ from settings import NETWORK_NAME
 from views.components import Shell
 
 router = Router()
-
-
-def safe_next(value: str | None) -> str:
-    return value if value and value.startswith("/") and not value.startswith("//") else "/"
 
 
 @router.page("/login")
@@ -22,7 +33,7 @@ class Login(Page):
     next_url = State("/")
 
     async def mount(self):
-        self.next_url = safe_next(self.request.query_params.get("next"))
+        self.next_url = local_path(self.request.query_params.get("next"))  # never another site
         self.members = await self.use(SocialService).members()
 
     def sign_in_as(self, handle: str):

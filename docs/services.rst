@@ -39,7 +39,12 @@ annotation as the response model, and publishes everything in OpenAPI at ``/api/
   error; any other exception becomes a generic 500 and is logged.
 * ``GET`` is for safe, idempotent reads only.
 
-From custom browser code: ``await rational.call("todo", "add", {title: "Write docs"})``.
+From custom browser code on an interactive page, ``rational.call`` sends the session's CSRF token
+for you and throws on an error response (the parsed body is on ``error.response``)::
+
+    await rational.call("todo", "add", {title: "Write docs"})          // POST /api/todo/add
+    await rational.call("todo", "search", {q: "docs"}, {verb: "GET"})  // GET /api/todo/search?q=docs
+    await rational.call(null, null, {id: 1}, {path: "/api/custom"})    // a @remote with path=...
 
 Swagger UI
 ----------

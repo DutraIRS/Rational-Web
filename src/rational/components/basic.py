@@ -194,7 +194,12 @@ BADGE_TONES: dict[str, Style] = {
     "neutral": Style(background="surface_alt", color="on_surface"),
     "primary": Style(background="secondary", color="on_secondary"),
     **{
-        tone: Style(background=f"color-mix(in srgb, var(--rw-color-{tone}) 16%, transparent)", color=tone)
+        tone: Style(
+            background=f"color-mix(in srgb, var(--rw-color-{tone}) 14%, transparent)",
+            # A darker text token than the base colour: badge text is 12px, so WCAG AA
+            # needs 4.5:1 against the light tint, which the base token does not reach.
+            color=f"{tone}_text",
+        )
         for tone in ("success", "warning", "danger")
     },
 }

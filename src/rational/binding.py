@@ -36,15 +36,44 @@ def _message(err: Any) -> str:
 
 
 def check_signature(handler: Callable[..., Any]) -> None:
-    if len(_required_positional(handler)) > 1:
+    """A handler takes at most one *required* positional parameter (the payload).
+
+    Defaulted positional parameters are the documented idiom for capturing values in
+    lambdas (``lambda i=i: ...``), so they are not counted; ``*args`` is rejected.
+    """
+    try:
+        sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return
+    for p in sig.parameters.values():
+        if p.kind is p.VAR_POSITIONAL:
+            raise TypeError(f"event handler {handler!r} must not take *args")
+    required = [
+        p
+        for p in sig.parameters.values()
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
+    ]
+    if len(required) > 1:
         raise TypeError(f"event handler {handler!r} must take at most one argument (the value/form/event)")
 
 
+def _payload_param(handler: Callable[..., Any]) -> inspect.Parameter | None:
+    """The required positional parameter that receives the payload, if there is one."""
+    try:
+        sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return None
+    for p in sig.parameters.values():
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty:
+            return p
+    return None
+
+
 def bind_payload(handler: Callable[..., Any], event: str, payload: dict[str, Any]) -> list[Any]:
-    params = _required_positional(handler)
-    if not params:
+    param = _payload_param(handler)
+    if param is None:
         return []
-    annotation = _annotation(getattr(handler, "__func__", handler), params[0].name)
+    annotation = _annotation(getattr(handler, "__func__", handler), param.name)
     if annotation is Event:
         return [
             Event(name=event, value=payload.get("value"), key=payload.get("key"), form=dict(payload.get("form") or {}))
@@ -58,18 +87,6 @@ def bind_payload(handler: Callable[..., Any], event: str, payload: dict[str, Any
         return [_adapter(annotation).validate_python(raw)]
     except ValidationError as exc:
         raise EventValidationError(exc) from None
-
-
-def _required_positional(handler: Callable[..., Any]) -> list[inspect.Parameter]:
-    try:
-        sig = inspect.signature(handler)
-    except (TypeError, ValueError):
-        return []
-    return [
-        p
-        for p in sig.parameters.values()
-        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
-    ]
 
 
 _hints_by_code: dict[Any, dict[str, Any]] = {}

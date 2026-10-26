@@ -1,3 +1,4 @@
+import contextlib
 import sqlite3
 import sys
 import textwrap
@@ -38,7 +39,7 @@ def project(tmp_path, monkeypatch):
 
 
 def tables(path):
-    with sqlite3.connect(path) as conn:
+    with contextlib.closing(sqlite3.connect(path)) as conn:  # sqlite3's own "with" does not close
         return {row[0] for row in conn.execute("select name from sqlite_master where type='table'")}
 
 

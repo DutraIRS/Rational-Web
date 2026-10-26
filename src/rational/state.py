@@ -76,7 +76,7 @@ class State(Generic[T]):
         store, key, cell = self._locate(instance)
         old = store.get(key, MISSING)
         store[key] = value
-        if old is MISSING or not _equal(old, value):
+        if old is MISSING or not values_equal(old, value):
             self.notify(instance, cell)
 
     def notify(self, instance: Component, cell: Cell | None = None) -> None:
@@ -106,7 +106,8 @@ class State(Generic[T]):
         return session.state, key, ("s", key)
 
 
-def _equal(a: Any, b: Any) -> bool:
+def values_equal(a: Any, b: Any) -> bool:
+    """``a == b``, treating a comparison that fails or is ambiguous (arrays) as 'different'."""
     try:
         return bool(a == b)
     except Exception:

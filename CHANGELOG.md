@@ -34,10 +34,14 @@ All notable changes to this project are documented here. The format follows
   `App(fine_patches=False)`.
 - `rational new NAME` scaffolds a small runnable project (app, page, test, README, requirements).
 - Persistent sessions: `App(session_store=PersistentSessionStore(driver))` keeps the CSRF token and
-  `session.data` (JSON, never pickle) outside the process, through a four-method async
-  `SessionDriver`. Ships `RedisSessionDriver` (`pip install "rational[redis]"`) and a memory driver.
-  Logins and API calls then work on any worker and survive restarts; logout is seen everywhere.
-- `SessionBackend` gained async `load` and `save` hooks (no-ops for the in-memory store).
+  `session.data` (JSON, never pickle) outside the process, through a five-method async
+  `SessionDriver` (`get`, `set`, `cas`, `touch`, `delete`). Ships `RedisSessionDriver`
+  (`pip install "rational[redis]"`) and a memory driver. Logins and API calls then work on any
+  worker and survive restarts; logout is seen everywhere. Writes are compare-and-swap: concurrent
+  changes from two workers are merged key by key, and a logged-out session is never written back.
+- `SessionBackend` gained async `load`, `rotate` and `save` hooks (trivial for the in-memory store).
+- `rational.local_path(value, default="/")` for `?next=` style redirect targets.
+- `rational.call(service, method, args, {verb, path})` reaches GET and custom-path `@remote` methods.
 - `ModelForm(Model, on_submit=...)`: a form generated from a Pydantic model (labels, help text, HTML
   constraints, selects for enums and literals, pre-filled values, server-side errors).
 - Components `Modal` (native `<dialog>`), `Tabs`, `Table`, `Toast`, `Toasts`, `Menu` and `MenuItem`.
@@ -63,6 +67,40 @@ All notable changes to this project are documented here. The format follows
   (`GET /_rational/stream`). Tasks are cancelled on unmount and when the page expires.
 - Protocol: responses carry a `seq` number, so the browser applies pushed and event-driven patches in
   render order, and reloads if a reconnect shows it missed a batch.
+
+### Changed
+- Resumable pages work without sticky routing: a worker whose copy of a page is older than the
+  browser's rebuilds it from the snapshot instead of answering 409, and snapshot writes are
+  compare-and-swap, so two workers cannot both advance one page.
+- Live-session sync across workers uses one bus channel (`rational:sessions`) per worker instead of
+  one subscription per session, which grew without bound.
+- `Checkbox` takes `help=` and `error=` like the other fields (and `ModelForm` passes them); its
+  root is now a `<div>` wrapping the label row and the messages.
+- `Redirect` raised by an event now also follows `http(s)` URLs on other origins (a payment page,
+  say), as it already did during a page render.
+- Badges use darker `success_text`, `warning_text` and `danger_text` theme tokens for AA contrast.
+- The style compiler's cache is a bounded LRU.
+
+### Fixed
+- A login in an event handler with a persistent session store answered with the old CSRF token, so
+  the next event failed with 403.
+- Session rotation state was kept on the shared `App` object, so concurrent requests could rotate
+  each other's sessions.
+- A request that failed after `session.login()` stored the signed-in session under the old,
+  pre-login id before rotating it.
+- A component that read `context.user` before any session existed never re-rendered after a login.
+- An empty custom session store that defines `__len__` was silently replaced by the default store.
+- A `CSRF` header with non-ASCII characters crashed the request instead of failing the check.
+- The redirect to `login_path` did not encode `next` and dropped the query string.
+
+### Security
+- `srcdoc` is rejected like `on*` attributes; `data` is checked as a URL attribute.
+- `js.set_attr` and `js.toggle_attr` apply the renderer's attribute rules (they could set
+  `onclick`, `srcdoc` or a `javascript:` URL before).
+- `Redirect` refuses `javascript:`, `vbscript:` and `data:` targets; `self.navigate()` refuses
+  whitespace and backslash tricks; the examples' `safe_next` helpers, which let `/\host` and
+  `/<TAB>/host` through as open redirects, are replaced by `local_path`.
+- `js.set_theme` checks its argument before it reaches a cookie.
 
 ## [0.1.0a2] - 2026-10-22
 

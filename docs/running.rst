@@ -69,11 +69,19 @@ the others. What is stored is JSON: the CSRF token and ``session.data`` includin
 so keep session values JSON-compatible (or pass ``serialize=`` and ``deserialize=``). It is never
 pickled, because a shared store is a trust boundary. Match ``ttl=`` to ``App(session_ttl=...)``.
 
-Limits: concurrent writes from different workers are last-write-wins. JSON-compatible
-``State(scope="session")`` values travel with the session; anything else stays worker-local. Open
-pages are worker-local too unless you enable resumable pages (next section). Any other backend (a
-database, say) only has to implement
-:class:`~rational.stores.SessionDriver`: four async methods, ``get``, ``set``, ``touch`` and ``delete``.
+Two workers can change the same session at the same time (two tabs, say). Every write is a
+compare-and-swap, so neither overwrites the other blindly: the second writer reads the record again,
+keeps the keys it changed, takes every other key from the stored record and retries. When both
+change the *same* key, the last write wins. Assign values rather than mutating them in place
+(``session["cart"] = [*cart, item]``), because in-place changes are not detected.
+
+Logging in or out gives the session a new id. The old record is deleted at once, and a worker
+still holding the old id finds it gone and drops it instead of writing it back, so a signed-out
+session cannot come back. JSON-compatible ``State(scope="session")`` values travel with the
+session; anything else stays worker-local. Open pages are worker-local too unless you enable
+resumable pages (next section). Any other backend (a database, say) only has to implement
+:class:`~rational.stores.SessionDriver`: five async methods, ``get``, ``set``, ``cas``
+(an atomic compare-and-swap), ``touch`` and ``delete``.
 
 Resumable pages
 ---------------
@@ -97,7 +105,12 @@ the handler ids in the browser still match. This means:
 * ``mount()`` and background tasks run again, so keep them idempotent. ``Suspense`` content is loaded again.
 * Only the path parameters of the route are restored, not the query string.
 * Rebuilding checks that the browser's session owns the snapshot.
-* Each event pays one extra write to the driver.
+* Each event pays one extra read and write to the driver.
+* Events may reach any worker. A worker whose copy of the page is older than the browser's (because
+  another worker handled the latest events) rebuilds it from the snapshot. Sticky routing is still
+  faster, since it avoids those rebuilds. If two workers handle events for the same page at the
+  same moment, the snapshot is a compare-and-swap: one event wins, and the other is answered with a
+  reload.
 * Pushes cross workers only for session data (next section). A push stream still talks to the one
   process that holds it, so background-task pushes made by a different worker than the one holding the
   stream are not forwarded. Use sticky routing if you rely on those.
@@ -119,11 +132,13 @@ the pages held by the others::
         bus=RedisBus(url=REDIS_URL),
     )
 
-Each save publishes the session id; a worker that shows that session's data reloads it from the store,
-which marks its pages dirty and pushes. Delivery is best effort and at most once, so a missed message
-only delays the update to the page's next event. ``app.bus`` is also yours for other channels
-(``await app.bus.publish(channel, text)`` and ``await app.bus.subscribe(channel, callback)``).
-The Redis bus is tested here only against a fake client, not a live server.
+Each save publishes the session id on one shared channel (``rational:sessions``); a worker that shows
+that session's data merges the newer record in, which marks its pages dirty and pushes. Each worker
+holds a single subscription, however many sessions it serves. Delivery is best effort and at most
+once, so a missed message only delays the update to the page's next event. ``app.bus`` is also yours
+for other channels (``await app.bus.publish(channel, text)`` and
+``await app.bus.subscribe(channel, callback)``). The Redis bus and driver are tested here against
+fake clients, not a live server.
 
 Client-side navigation
 ----------------------

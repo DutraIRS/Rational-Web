@@ -23,7 +23,7 @@ from pydantic import BaseModel, ValidationError
 from . import dev
 from .errors import InvalidInput, RationalError, Redirect
 from .http import SESSION_COOKIE, csrf_ok, json_error
-from .runtime import StaleHandlerError
+from .runtime import PageRuntime, StaleHandlerError
 
 if TYPE_CHECKING:
     from .app import App
@@ -49,6 +49,22 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
     return json_error(status, code, message, v=PROTOCOL_VERSION)
 
 
+def _stale(runtime: PageRuntime, message: str) -> JSONResponse:
+    """409: the browser's view of the page is out of date; it reloads."""
+    return JSONResponse(
+        {
+            "v": PROTOCOL_VERSION,
+            "rev": runtime.revision,
+            "patches": [],
+            "css": [],
+            "actions": [{"op": "reload"}],
+            "error": {"code": "stale_revision", "message": message},
+        },
+        status_code=409,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def handle_event(app: App, request: Request) -> Response:
     body = await request.body()
     if len(body) > app.max_event_bytes:
@@ -59,7 +75,7 @@ async def handle_event(app: App, request: Request) -> Response:
         return _error(400, "bad_request", "Malformed event")
     if event.v != PROTOCOL_VERSION:
         return _error(410, "version", "The page is out of date")
-    runtime = await app.page_for(request, event.page)
+    runtime = await app.page_for(request, event.page, rev=event.rev)
     if runtime is None:
         return _error(410, "expired", "This page expired")
     session = await app.load_session(request)
@@ -73,21 +89,7 @@ async def handle_event(app: App, request: Request) -> Response:
     ctx = await app.context_for(request, session)
     async with app.session_lock(ctx), runtime.lock:
         if event.rev != runtime.revision:
-            return JSONResponse(
-                {
-                    "v": PROTOCOL_VERSION,
-                    "rev": runtime.revision,
-                    "patches": [],
-                    "css": [],
-                    "actions": [{"op": "reload"}],
-                    "error": {
-                        "code": "stale_revision",
-                        "message": "This page changed in another request; reload it before continuing",
-                    },
-                },
-                status_code=409,
-                headers={"Cache-Control": "no-store"},
-            )
+            return _stale(runtime, "This page changed in another request; reload it before continuing")
         runtime.context = ctx
         runtime.refresh_session_state()
         error: dict[str, Any] | None = None
@@ -139,24 +141,29 @@ async def handle_event(app: App, request: Request) -> Response:
                     error_code=error.get("code") if error else None,
                 )
         patches = await runtime.flush()
+        stored_revision = runtime.revision
         runtime.revision += 1
         runtime.seq += 1
-        payload: dict[str, Any] = {
-            "v": PROTOCOL_VERSION,
-            "rev": runtime.revision,
-            "seq": runtime.seq,
-            "patches": patches,
-            "css": runtime.sheet.drain(),
-            "actions": runtime.take_actions(),
-        }
-        if error is not None:
-            payload["error"] = error
-        if app.commit_session(ctx):
-            payload["csrf"] = session.csrf
-        if app.resume is not None:
-            await app.resume.save(runtime)
-        response = JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
-        app.finish(request, response, ctx)
+        if app.resume is not None and not await app.resume.save(runtime, expect_revision=stored_revision):
+            # Another worker advanced this page concurrently: this copy has diverged, drop it.
+            app.pages.pop(runtime.id)
+            runtime.dispose()
+            response = _stale(runtime, "This page changed on another server; reload it before continuing")
+        else:
+            payload: dict[str, Any] = {
+                "v": PROTOCOL_VERSION,
+                "rev": runtime.revision,
+                "seq": runtime.seq,
+                "patches": patches,
+                "css": runtime.sheet.drain(),
+                "actions": runtime.take_actions(),
+            }
+            if error is not None:
+                payload["error"] = error
+            if await app.commit_session(ctx):
+                payload["csrf"] = session.csrf
+            response = JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
+        await app.finish(request, response, ctx)
         return response
 
 

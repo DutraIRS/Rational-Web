@@ -22,7 +22,9 @@ Real accounts: sign-up with hashed passwords, sign-in, profile settings, roles a
    :caption: services/security.py
 
 ``hashlib.scrypt`` from the standard library, a random salt per password, and a constant-time
-comparison. ``safe_next`` refuses ``//evil.example``-style redirects.
+comparison. After signing in, the ``?next=`` target goes through :func:`rational.local_path`, which
+refuses anything that is not a path on this site (``//evil.example``, ``/\evil.example`` and the
+like), so a crafted link cannot turn the login page into an open redirect.
 
 2. Who is signed in?
 --------------------

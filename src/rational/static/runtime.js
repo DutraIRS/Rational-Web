@@ -207,7 +207,10 @@
       if (next) morph(el, next);
     }
     for (const a of data.actions || []) {
-      if (a.op === "navigate" && isSameOrigin(a.url)) go(a.url.startsWith("/") ? (M.base || "") + a.url : a.url);
+      if (a.op === "navigate") {
+        if (isSameOrigin(a.url)) go(a.url.startsWith("/") ? (M.base || "") + a.url : a.url);
+        else if (/^https?:\/\//i.test(a.url)) location.assign(a.url);  // e.g. a payment provider
+      }
       else if (a.op === "reload") location.reload();
       else if (a.op === "stream") { M.stream = M.stream || M.endpoint.replace(/event$/, "stream"); openStream(); }
       else if (a.op === "js") runOps(a.ops, document.body);
@@ -273,7 +276,12 @@
           if (el.type === "checkbox" || el.type === "radio") el.checked = el.hasAttribute("checked");
           else if (!focused) el.value = el.getAttribute("value") ?? "";
         } else if (el instanceof HTMLOptionElement && el.parentElement instanceof HTMLSelectElement) {
-          if (el.hasAttribute("selected")) el.parentElement.value = el.value;
+          const select = el.parentElement;
+          if (select.multiple) {
+            el.selected = el.hasAttribute("selected");
+          } else if (el.hasAttribute("selected")) {
+            select.value = el.value;
+          }
         }
       } else if (kind === "t") {
         if (el instanceof HTMLTextAreaElement) { if (document.activeElement !== el) el.value = arg; }
@@ -334,8 +342,13 @@
         if (from.value !== v) from.value = v;
       }
     } else if (from instanceof HTMLSelectElement) {
-      const selected = Array.from(to.options).find((o) => o.hasAttribute("selected"));
-      if (selected && from.value !== selected.value) from.value = selected.value;
+      if (from.multiple) {
+        const wanted = new Set(Array.from(to.options).filter((o) => o.hasAttribute("selected")).map((o) => o.value));
+        for (const o of from.options) o.selected = wanted.has(o.value);
+      } else {
+        const selected = Array.from(to.options).find((o) => o.hasAttribute("selected"));
+        if (selected && from.value !== selected.value) from.value = selected.value;
+      }
     }
   }
 
@@ -577,13 +590,21 @@
   openStream();
   window.rational = {
     version: PROTOCOL,
-    /** Call a @remote method: rational.call("todo", "add", {title: "x"}) -> POST /api/todo/add */
-    async call(service, method, body) {
-      const res = await fetch(`${M.api}/${encodeURIComponent(service)}/${encodeURIComponent(method)}`, {
-        method: "POST",
+    /** Call a @remote method: rational.call("todo", "add", {title: "x"}) -> POST /api/todo/add.
+     *  Options: {verb: "GET"} for @remote(method="GET"), whose arguments travel as the query string;
+     *  {path: "/api/custom"} for a @remote with a custom path. */
+    async call(service, method, args, options) {
+      const verb = ((options && options.verb) || "POST").toUpperCase();
+      const bodyless = verb === "GET" || verb === "HEAD";
+      let url = options && options.path
+        ? (M.base || "") + options.path
+        : `${M.api}/${encodeURIComponent(service)}/${encodeURIComponent(method)}`;
+      if (bodyless && args) url += "?" + new URLSearchParams(args);
+      const res = await fetch(url, {
+        method: verb,
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-RW-CSRF": M.csrf },
-        body: JSON.stringify(body || {}),
+        body: bodyless ? undefined : JSON.stringify(args || {}),
       });
       const data = await res.json();
       if (!res.ok) throw Object.assign(new Error(data.error?.message || res.statusText), { response: data });

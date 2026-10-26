@@ -370,7 +370,7 @@ class PageRuntime:
         if not any(cell[0] == "s" for cell in self.deps):
             return
         session.listeners.add(self)
-        app.follow_session(session)
+        app.follow_sessions()
         if not self.wants_stream:
             self.wants_stream = True
             if self.served:

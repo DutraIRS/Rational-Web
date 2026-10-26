@@ -52,6 +52,7 @@ from .concurrency import HandlerTimeout, threaded, timeout
 from .context import Context
 from .errors import FieldError, Forbidden, NotFound, RemoteError, Unauthorized, redirect
 from .events import Event, js
+from .http import local_path
 from .i18n import I18n
 from .logging import Logging
 from .rendering import h, unsafe_html
@@ -130,6 +131,7 @@ __all__ = [
     "cx",
     "h",
     "js",
+    "local_path",
     "redirect",
     "tailwind",
     "threaded",

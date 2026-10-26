@@ -38,7 +38,39 @@ def json_error(status: int, code: str, message: str, *, details: Any = None, **e
 
 
 def csrf_ok(request: Request, session: Session) -> bool:
-    return hmac.compare_digest(request.headers.get(CSRF_HEADER, ""), session.csrf)
+    # Compared as bytes: a header with non-ASCII characters must fail the check, not raise.
+    return hmac.compare_digest(request.headers.get(CSRF_HEADER, "").encode("latin-1"), session.csrf.encode())
+
+
+def is_local_path(value: str) -> bool:
+    """True if ``value`` is a path on this site (``"/orders?page=2"``), not a URL to another origin.
+
+    Besides ``https://host`` it refuses ``//host`` and ``/\\host``, and any whitespace or control
+    character, because browsers strip those before they parse a URL (``/<TAB>/host`` is ``//host``).
+    """
+    return (
+        value.startswith("/")
+        and not value.startswith("//")
+        and "\\" not in value
+        and not any(ord(c) <= 0x20 or ord(c) == 0x7F for c in value)
+    )
+
+
+def local_path(value: str | None, default: str = "/") -> str:
+    """``value`` if it is a path on this site, else ``default``.
+
+    Use it on any redirect target taken from the request, such as a ``?next=`` parameter, so that a
+    crafted link cannot send users to another site after they sign in (an open redirect).
+    """
+    return value if value and is_local_path(value) else default
+
+
+def request_target(request: Request) -> str:
+    """The path and query of ``request`` within the app (without the mount prefix)."""
+    path, base = request.url.path, base_path(request)
+    if base and path.startswith(base):
+        path = path[len(base) :] or "/"
+    return f"{path}?{request.url.query}" if request.url.query else path
 
 
 def security_headers(

@@ -86,9 +86,16 @@ class NotFound(RationalError):
 
 
 class Redirect(Exception):  # noqa: N818 - control flow, not an error
-    """Raise during a page render or an event to send the browser elsewhere."""
+    """Raise during a page render or an event to send the browser elsewhere.
+
+    ``url`` is a path on this site or an ``http(s)`` URL. Never pass a value taken from the request
+    unchecked: wrap it in :func:`rational.local_path` first.
+    """
 
     def __init__(self, url: str, status: int = 303) -> None:
+        from .rendering.nodes import check_url  # imported here: errors must not depend on rendering at import
+
+        check_url(url)  # no javascript:, vbscript: or data: targets
         super().__init__(url)
         self.url = url
         self.status = status

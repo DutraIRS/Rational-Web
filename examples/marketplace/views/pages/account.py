@@ -1,6 +1,23 @@
 """Signing in and order history."""
 
-from rational import Badge, Button, Card, Column, Form, Heading, Input, Page, Router, Row, Spacer, State, Style, Text, h
+from rational import (
+    Badge,
+    Button,
+    Card,
+    Column,
+    Form,
+    Heading,
+    Input,
+    Page,
+    Router,
+    Row,
+    Spacer,
+    State,
+    Style,
+    Text,
+    h,
+    local_path,
+)
 
 from models import SignInForm, price
 from services import ShopService
@@ -10,18 +27,13 @@ from views.styles import FLAT_CARD, NARROW_CARD, SUCCESS_CARD
 router = Router()
 
 
-def safe_next(value: str | None) -> str:
-    """Only same-site paths: never redirect to another origin."""
-    return value if value and value.startswith("/") and not value.startswith("//") else "/"
-
-
 @router.page("/login")
 class Login(Page):
     title = "Sign in · Rational Market"
     next_url = State("/")
 
     def mount(self):
-        self.next_url = safe_next(self.request.query_params.get("next"))
+        self.next_url = local_path(self.request.query_params.get("next"))  # never another site
 
     def sign_in(self, form: SignInForm):
         # login() rotates the session *id* (against session fixation) but keeps its data: the cart stays.

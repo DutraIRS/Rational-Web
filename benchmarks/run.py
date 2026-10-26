@@ -140,17 +140,27 @@ async def main(seconds: float) -> None:
             rows.append((label, rps, pct(s, 50), pct(s, 95)))
 
         page = await client.get("/counter")
-        manifest = page.text.split('id="rw-manifest">')[1].split("</script>")[0]
+        manifest = page.text.split('id="rw-manifest">')[1].split("</script>")
         import json
 
-        m = json.loads(manifest)
-        body = {"v": 1, "page": m["page"], "rev": 0, "handler": "c1.1", "payload": {}}
+        m = json.loads(manifest[0])
         app.event_burst, app.event_rate = 10**9, 10**9
-        rps, s = await throughput(
-            lambda: client.post("/_rational/event", json=body, headers={"X-RW-CSRF": m["csrf"]}), seconds
-        )
+
+        async def click() -> None:
+            nonlocal m
+            body = {"v": 1, "page": m["page"], "rev": m["rev"], "handler": "c1.1", "payload": {}}
+            r = await client.post("/_rational/event", json=body, headers={"X-RW-CSRF": m["csrf"]})
+            assert r.status_code == 200, f"event failed: {r.status_code} {r.text}"
+            m["rev"] = r.json()["rev"]  # feed the returned revision back: every click must succeed
+
+        rps, s = await throughput(click, seconds)
         rows.append(("Rational: event round trip (click -> patch)", rps, pct(s, 50), pct(s, 95)))
-        event_response = await client.post("/_rational/event", json=body, headers={"X-RW-CSRF": m["csrf"]})
+        event_response = await client.post(
+            "/_rational/event",
+            json={"v": 1, "page": m["page"], "rev": m["rev"], "handler": "c1.1", "payload": {}},
+            headers={"X-RW-CSRF": m["csrf"]},
+        )
+        assert event_response.status_code == 200, "the event response must be a successful round trip"
         table_html = (await client.get("/table")).text
         dashboard = await dashboard_html()
 

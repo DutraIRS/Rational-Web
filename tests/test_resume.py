@@ -7,8 +7,8 @@ from rational.stores import MemorySessionDriver
 from rational.testing import EventFailedError, TestClient
 
 
-def make_app(**kwargs):
-    app = App(page_snapshots=MemorySessionDriver(), **kwargs)
+def make_app(snapshots=None, **kwargs):
+    app = App(page_snapshots=MemorySessionDriver() if snapshots is None else snapshots, **kwargs)
     mounts = []
 
     class Counter(Component):
@@ -59,6 +59,33 @@ def test_page_resumes_after_its_runtime_is_evicted():
         view.click("+")
         assert "count=3" in view.html and "total=10" in view.html and "item 7" in view.html
         assert len(mounts) == 2  # mount() ran again for the rebuilt page
+
+
+def test_workers_can_take_turns_on_one_page():
+    """Without sticky routing each event may reach either worker: an outdated copy is rebuilt, not refused."""
+    from rational import PersistentSessionStore
+
+    driver = MemorySessionDriver()
+    workers = [TestClient(make_app(driver, session_store=PersistentSessionStore(driver))[0]) for _ in range(2)]
+    view = workers[0].open("/items/7")
+    workers[1].http.cookies.set("rw_sid", workers[0].http.cookies["rw_sid"])
+    for turn in range(4):
+        view.client = workers[turn % 2]
+        assert "error" not in view.click("+")
+    assert "count=4" in view.html
+
+
+def test_a_snapshot_write_loses_to_a_concurrent_one():
+    import asyncio
+
+    app, _ = make_app()
+    with TestClient(app) as client:
+        client.open("/items/1")
+        runtime = next(iter(app.pages._items.values()))[1]
+        runtime.revision = 1  # this worker advanced the page from revision 0...
+        assert asyncio.run(app.resume.save(runtime, expect_revision=0))
+        runtime.revision = 1  # ...and so did another worker, from the same revision
+        assert not asyncio.run(app.resume.save(runtime, expect_revision=0))
 
 
 def test_unknown_page_without_snapshots_is_still_gone():

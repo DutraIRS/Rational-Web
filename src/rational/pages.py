@@ -9,6 +9,7 @@ import time
 import typing
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -19,7 +20,7 @@ from .component import Page
 from .context import Context
 from .document import render_document
 from .errors import RationalError, Redirect
-from .http import base_path, security_headers
+from .http import base_path, request_target, security_headers
 from .protocol import EVENT_PATH, PROTOCOL_VERSION, STREAM_PATH, WS_PATH
 from .rendering.html import escape_text, to_html
 from .runtime import PageRuntime
@@ -71,18 +72,19 @@ class PageRoute:
         app = self.app
         base = base_path(request)
 
-        def finish(response: Response) -> Response:
-            app.finish(request, response, ctx)
+        async def finish(response: Response) -> Response:
+            await app.finish(request, response, ctx)
             return response
 
         try:
             props = {name: a.validate_python(request.path_params[name]) for name, a in self.adapters.items()}
         except ValidationError:
-            return finish(error_page(app, request, 404, "Page not found"))
+            return await finish(error_page(app, request, 404, "Page not found"))
         if self.auth == "required" and ctx.user is None:
             if app.login_path:
-                return finish(RedirectResponse(f"{base}{app.login_path}?next={request.url.path}", status_code=303))
-            return finish(error_page(app, request, 401, "Please sign in to view this page"))
+                login = f"{base}{app.login_path}?{urlencode({'next': request_target(request)}, safe='/')}"
+                return await finish(RedirectResponse(login, status_code=303))
+            return await finish(error_page(app, request, 401, "Please sign in to view this page"))
 
         page = self.page(**props)
         runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
@@ -117,12 +119,12 @@ class PageRoute:
         except Redirect as r:
             url = base + r.url if r.url.startswith("/") and not r.url.startswith("//") else r.url
             response: Response = RedirectResponse(url, status_code=r.status)
-            return finish(response)
+            return await finish(response)
         except RationalError as e:
-            return finish(error_page(app, request, e.status, e.message))
+            return await finish(error_page(app, request, e.status, e.message))
         except Exception as e:
             if app.debug:
-                return finish(dev.error_page(request, e))
+                return await finish(dev.error_page(request, e))
             raise
 
         manifest = None
@@ -168,7 +170,7 @@ class PageRoute:
         )
         response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
         security_headers(response, nonce, style_origins=app.style_origins, script_origins=app.script_origins)
-        return finish(response)
+        return await finish(response)
 
 
 def error_page(app: App, request: Request, status: int, message: str) -> HTMLResponse:

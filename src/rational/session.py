@@ -1,7 +1,7 @@
 """Server-side browser sessions and bounded in-memory stores.
 
-The browser only holds an opaque random id (``rw_sid`` cookie). v0.1 keeps
-everything in process memory: run one worker, or use sticky sessions.
+The browser only holds an opaque random id (``rw_sid`` cookie). The default store keeps
+sessions in process memory; :mod:`rational.stores` persists them for several workers.
 """
 
 from __future__ import annotations
@@ -31,10 +31,13 @@ class Session(MutableMapping[str, Any]):
         self.state: dict[str, Any] = {}
         self.lock = asyncio.Lock()
         self.revision = 0
-        self.version = 0  # write counter of the persisted copy; only used by persistent stores
-        self.saved_revision = -1  # the revision last written out; -1 means never
-        self.touched_at = 0.0
         self.rotated = False
+        # Bookkeeping for persistent stores: the stored record this worker last read or wrote,
+        # its write counter, the revision it reflects and when the record's expiry was renewed.
+        self.synced: bytes | None = None
+        self.version = 0
+        self.saved_revision = -1
+        self.touched_at: float | None = None
         # Page runtimes that want to hear about changes (live cross-tab sync); weak, so they can expire.
         self.listeners: weakref.WeakSet[Any] = weakref.WeakSet()
 
@@ -130,16 +133,17 @@ class TTLStore(Generic[V]):
 class SessionBackend(Protocol):
     """What ``App`` needs from a session store; implement it to plug in Redis, a database, etc.
 
-    ``get``, ``create``, ``rotate`` and ``sweep`` are synchronous and local. ``load`` runs at the start
-    of a request and may fetch from outside the process; ``save`` runs when the request is done with the
-    session and persists it. A purely in-memory store makes both trivial.
+    ``get``, ``create`` and ``sweep`` are synchronous and local. The rest may talk to a store outside
+    the process: ``load`` runs at the start of a request, ``rotate`` gives a session a new id and CSRF
+    token (login, logout) before the response names the new id, and ``save`` runs when the request is
+    done with the session. A purely in-memory store makes all three trivial.
     """
 
     def get(self, sid: str | None) -> Session | None: ...
     def create(self) -> Session: ...
-    def rotate(self, session: Session) -> None: ...
     def sweep(self) -> int: ...
     async def load(self, sid: str | None) -> Session | None: ...
+    async def rotate(self, session: Session) -> None: ...
     async def save(self, session: Session) -> None: ...
 
 
@@ -163,7 +167,7 @@ class SessionStore:
         self._store.put(session.id, session)
         return session
 
-    def rotate(self, session: Session) -> None:
+    async def rotate(self, session: Session) -> None:
         self._store.pop(session.id)
         session.id = secrets.token_urlsafe(32)
         session.csrf = secrets.token_urlsafe(24)

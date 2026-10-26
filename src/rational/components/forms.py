@@ -83,21 +83,21 @@ def _field(
         class_="rw-sr-only" if hide_label else None,
         style=None if hide_label else LABEL,
     )
-    parts: list[Any] = [label_node, control]
-    if help:
-        parts.append(h("p", help, id=f"{control_id}-help", style=HELP))
-    parts.append(
-        h(
-            "p",
-            error or "",
-            id=f"{control_id}-error",
-            hidden=not error,
-            data_rw_error_for=name,
-            aria_live="polite",
-            style=ERROR,
-        )
+    return h("div", label_node, control, *_messages(control_id, name, help, error), key=key, style=merge(FIELD, style))
+
+
+def _messages(control_id: str, name: str, help: str | None, error: str | None) -> list[Node]:  # noqa: A002
+    """The help text, if any, and the error slot that the runtime fills when validation fails."""
+    slot = h(
+        "p",
+        error or "",
+        id=f"{control_id}-error",
+        hidden=not error,
+        data_rw_error_for=name,
+        aria_live="polite",
+        style=ERROR,
     )
-    return h("div", *parts, key=key, style=merge(FIELD, style))
+    return [h("p", help, id=f"{control_id}-help", style=HELP), slot] if help else [slot]
 
 
 def _a11y(control_id: str, help: str | None, error: str | None) -> dict[str, str | None]:
@@ -230,6 +230,8 @@ def Checkbox(  # noqa: N802
     name: str | None = None,
     checked: bool = False,
     disabled: bool = False,
+    help: str | None = None,  # noqa: A002
+    error: str | None = None,
     on_change: EventValue = None,
     style: Style | None = None,
     key: str | int | None = None,
@@ -246,8 +248,10 @@ def Checkbox(  # noqa: N802
         value="true",
         checked=checked,
         disabled=disabled,
+        **_a11y(control_id, help, error),
         on_change=on_change,
         style=CHECKBOX,
         **attrs,
     )
-    return h("label", box, h("span", label), for_=control_id, key=key, style=merge(CHECK_ROW, style))
+    row = h("label", box, h("span", label), for_=control_id, style=CHECK_ROW)
+    return h("div", row, *_messages(control_id, name, help, error), key=key, style=merge(FIELD, style))

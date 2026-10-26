@@ -430,3 +430,117 @@ def test_routers_compose_pages_services_and_hooks():
         assert client.http.get("/api/stats/count").json() == 3
     assert started == [True]
     assert app.url_for(AdminUser, user_id=5) == "/admin/users/5"
+
+
+def session_stores():
+    from rational import PersistentSessionStore
+    from rational.stores import MemorySessionDriver
+
+    return [None, PersistentSessionStore(MemorySessionDriver())]
+
+
+@pytest.mark.parametrize("store", session_stores(), ids=["memory", "persistent"])
+def test_login_in_an_event_rotates_the_session_and_its_csrf_token(store):
+    app = App(session_store=store)
+
+    class Login(Component):
+        def sign_in(self):
+            self.context.session.login("ada")
+
+        def render(self):
+            return Column(Text(f"user: {self.context.user}"), Button("Sign in", on_click=self.sign_in))
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Login()
+
+    client = TestClient(app)
+    page = client.open("/")
+    old_csrf = page.manifest["csrf"]
+    page.click("Sign in")
+
+    session = app.sessions.get(client.http.cookies["rw_sid"])
+    assert session is not None and session.user == "ada"
+    assert page.manifest["csrf"] == session.csrf != old_csrf  # the next event must be accepted
+    page.click("Sign in")
+    assert "user: ada" in page.text
+
+
+@pytest.mark.parametrize("store", session_stores(), ids=["memory", "persistent"])
+def test_a_failed_request_rotates_before_anything_is_stored(store):
+    from rational.backend import Service, remote
+
+    app = App(session_store=store)
+
+    @app.service
+    class AccountService(Service):
+        @remote()
+        def login_then_fail(self) -> None:
+            self.context.session.login("alice")
+            raise RuntimeError("operation failed")
+
+    client = TestClient(app)
+    client.http.__init__(client.app, raise_server_exceptions=False)
+    session = app.sessions.create()
+    old_id = session.id
+
+    response = client.http.post(
+        "/api/account/login-then-fail",
+        json={},
+        headers={"X-RW-CSRF": session.csrf, "Cookie": f"rw_sid={old_id}"},
+    )
+
+    assert response.status_code == 500
+    new_id = response.headers["set-cookie"].split(";", 1)[0].split("=", 1)[1]
+    assert new_id != old_id and app.sessions.get(old_id) is None
+    if store is not None:
+        records = store.driver._items
+        assert f"rational:session:{old_id}" not in records  # the login was never stored under the old id
+        assert '"rw.user":"alice"' in records[f"rational:session:{new_id}"][1].decode()
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["https://evil.example", "//evil.example", "/\\evil.example", "/\t/evil.example", "/\n/evil.example", "", None],
+)
+def test_local_path_refuses_other_sites(target):
+    from rational import local_path
+
+    assert local_path(target) == "/"
+    assert local_path(target, default="/home") == "/home"
+
+
+@pytest.mark.parametrize("target", ["/", "/orders", "/orders?page=2&sort=new", "/a/b#c", "/caf%C3%A9"])
+def test_local_path_keeps_paths_on_this_site(target):
+    from rational import local_path
+
+    assert local_path(target) == target
+
+
+def test_redirects_cannot_run_script():
+    from rational.errors import Redirect
+
+    for url in ("javascript:alert(1)", " JAVASCRIPT:alert(1)", "data:text/html,<script>"):
+        with pytest.raises(ValueError):
+            Redirect(url)
+    assert Redirect("https://pay.example/checkout").url == "https://pay.example/checkout"
+
+
+def test_login_redirect_keeps_the_query_and_encodes_it():
+    app = App(login_path="/login")
+
+    @app.page("/orders", auth="required")
+    class Orders(Page):
+        def render(self):
+            return Text("orders")
+
+    response = TestClient(app).http.get("/orders?page=2&sort=new", follow_redirects=False)
+    assert response.headers["location"] == "/login?next=/orders%3Fpage%3D2%26sort%3Dnew"
+
+
+def test_a_non_ascii_csrf_header_is_refused_not_a_crash(app):
+    client = TestClient(app)
+    page = client.open("/")
+    response = post_event(client, page, headers={"X-RW-CSRF": "é".encode("latin-1")})
+    assert response.status_code == 403

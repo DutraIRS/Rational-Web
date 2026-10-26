@@ -1,4 +1,4 @@
-"""Password hashing (standard library scrypt) and safe redirects."""
+"""Password hashing with the standard library's scrypt."""
 
 import hashlib
 import hmac
@@ -21,8 +21,3 @@ def verify_password(password: str, stored: str) -> bool:
         return False
     candidate = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), **_SCRYPT)
     return hmac.compare_digest(candidate.hex(), digest)  # constant time
-
-
-def safe_next(value: str | None) -> str:
-    """Only same-site paths: never redirect to another origin (open-redirect protection)."""
-    return value if value and value.startswith("/") and not value.startswith("//") else "/"

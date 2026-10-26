@@ -17,10 +17,11 @@ from rational import (
     Row,
     State,
     Text,
+    local_path,
 )
 
 from models import SignInForm, SignUpForm, UserOut
-from services import AccountService, safe_next
+from services import AccountService
 from views.components import PasswordSettings, ProfileSettings, Shell
 from views.styles import NARROW_CARD
 
@@ -110,7 +111,7 @@ class Login(Page):
 
     def mount(self):
         # Query parameters belong to the page request, so read them in mount(), not in handlers.
-        self.next_url = safe_next(self.request.query_params.get("next"))
+        self.next_url = local_path(self.request.query_params.get("next"))  # never another site
 
     async def sign_in(self, form: SignInForm):
         user = await self.use(AccountService).authenticate(form.email, form.password)

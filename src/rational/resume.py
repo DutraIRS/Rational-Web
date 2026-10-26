@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import weakref
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
@@ -33,16 +34,31 @@ def _usable(state: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in state.items() if json_plain(v)}
 
 
+def _revision(raw: bytes) -> int | None:
+    """The revision a stored snapshot carries; ``None`` if it is unreadable."""
+    try:
+        return int(json.loads(raw)["rev"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 class PageResumer:
     def __init__(self, app: App, driver: SessionDriver, ttl: int = 60 * 60 * 24) -> None:
         self.app = app
         self.driver = driver
         self.ttl = ttl
-        self._lock = asyncio.Lock()
+        # Single flight per page id. An entry lives while someone holds or awaits its lock.
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     @staticmethod
     def _key(page_id: str) -> str:
         return f"rw:page:{page_id}"
+
+    def _lock_for(self, page_id: str) -> asyncio.Lock:
+        lock = self._locks.get(page_id)
+        if lock is None:
+            lock = self._locks[page_id] = asyncio.Lock()
+        return lock
 
     def snapshot(self, runtime: PageRuntime) -> dict[str, Any] | None:
         if runtime.origin is None or runtime.session is None:
@@ -65,14 +81,28 @@ class PageResumer:
             "components": components,
         }
 
-    async def save(self, runtime: PageRuntime) -> None:
+    async def save(self, runtime: PageRuntime, *, expect_revision: int | None = None) -> bool:
+        """Store the page's snapshot. Returns False only if another worker advanced the page first.
+
+        With ``expect_revision`` the write is a compare-and-swap: it lands only if the stored snapshot
+        still has that revision, so two workers holding the same page cannot both advance it. A failing
+        driver is logged and does not fail the event.
+        """
         snap = self.snapshot(runtime)
         if snap is None:
-            return
+            return True
+        key, raw = self._key(runtime.id), json.dumps(snap, separators=(",", ":")).encode()
         try:
-            await self.driver.set(self._key(runtime.id), json.dumps(snap, separators=(",", ":")).encode(), self.ttl)
+            if expect_revision is None:
+                await self.driver.set(key, raw, self.ttl)
+                return True
+            stored = await self.driver.get(key)
+            if stored is not None and _revision(stored) not in (None, expect_revision):
+                return False
+            return await self.driver.cas(key, stored, raw, self.ttl)
         except Exception:
             log.exception("could not save the page snapshot")
+            return True
 
     async def forget(self, page_id: str) -> None:
         try:
@@ -80,14 +110,19 @@ class PageResumer:
         except Exception:
             log.exception("could not delete the page snapshot")
 
-    async def resume(self, request: Request, page_id: str | None) -> PageRuntime | None:
-        """The live runtime for ``page_id``, rebuilt from its snapshot if need be; ``None`` if unknown."""
+    async def resume(self, request: Request, page_id: str | None, *, rev: int | None = None) -> PageRuntime | None:
+        """The live runtime for ``page_id``, rebuilt from its snapshot if this process lacks it or holds
+        a copy older than revision ``rev``; ``None`` if the page is unknown."""
         if not page_id:
             return None
-        async with self._lock:  # an event and a stream may ask for the same page at once
+        async with self._lock_for(page_id):  # an event and a stream may ask for the same page at once
             live = self.app.pages.get(page_id)
             if live is not None:
-                return live
+                if rev is None or live.revision >= rev:
+                    return live
+                self.app.pages.pop(page_id)  # outdated: other workers handled the latest events
+                async with live.lock:
+                    live.dispose()
             try:
                 raw = await self.driver.get(self._key(page_id))
                 snap = json.loads(raw) if raw else None

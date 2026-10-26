@@ -26,7 +26,10 @@ COLOR_TOKENS = (
     "danger_hover",
     "on_danger",
     "success",
+    "success_text",
     "warning",
+    "warning_text",
+    "danger_text",
     "focus",
 )
 
@@ -151,6 +154,9 @@ BASE_CSS = (
 MODERN = Theme(
     name="modern",
     light={
+        "success_text": "#166534",
+        "warning_text": "#92400e",
+        "danger_text": "#991b1b",
         "primary": "#4f46e5",
         "primary_hover": "#4338ca",
         "on_primary": "#ffffff",
@@ -172,6 +178,9 @@ MODERN = Theme(
         "focus": "#6366f1",
     },
     dark={
+        "success_text": "#86efac",
+        "warning_text": "#fde68a",
+        "danger_text": "#fecaca",
         "primary": "#818cf8",
         "primary_hover": "#a5b4fc",
         "on_primary": "#0b1020",
@@ -197,6 +206,9 @@ MODERN = Theme(
 MINIMAL = Theme(
     name="minimal",
     light={
+        "success_text": "#1b5e20",
+        "warning_text": "#8f5300",
+        "danger_text": "#a31f1f",
         "primary": "#111111",
         "primary_hover": "#333333",
         "on_primary": "#ffffff",
@@ -218,6 +230,9 @@ MINIMAL = Theme(
         "focus": "#111111",
     },
     dark={
+        "success_text": "#a5d6a7",
+        "warning_text": "#ffe0b2",
+        "danger_text": "#ffcdd2",
         "primary": "#f5f5f5",
         "primary_hover": "#d4d4d4",
         "on_primary": "#111111",
@@ -245,6 +260,9 @@ MINIMAL = Theme(
 SOFT = Theme(
     name="soft",
     light={
+        "success_text": "#065f46",
+        "warning_text": "#92400e",
+        "danger_text": "#9f1239",
         "primary": "#0d9488",
         "primary_hover": "#0f766e",
         "on_primary": "#ffffff",
@@ -266,6 +284,9 @@ SOFT = Theme(
         "focus": "#14b8a6",
     },
     dark={
+        "success_text": "#6ee7b7",
+        "warning_text": "#fde68a",
+        "danger_text": "#fecdd3",
         "primary": "#2dd4bf",
         "primary_hover": "#5eead4",
         "on_primary": "#042f2e",
@@ -292,6 +313,9 @@ SOFT = Theme(
 PROFESSIONAL = Theme(
     name="professional",
     light={
+        "success_text": "#14532d",
+        "warning_text": "#78350f",
+        "danger_text": "#7f1d1d",
         "primary": "#1d4ed8",
         "primary_hover": "#1e40af",
         "on_primary": "#ffffff",
@@ -313,6 +337,9 @@ PROFESSIONAL = Theme(
         "focus": "#2563eb",
     },
     dark={
+        "success_text": "#bbf7d0",
+        "warning_text": "#fde68a",
+        "danger_text": "#fecaca",
         "primary": "#60a5fa",
         "primary_hover": "#93c5fd",
         "on_primary": "#081225",

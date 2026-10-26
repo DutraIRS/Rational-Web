@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -49,13 +50,15 @@ class StyleCompiler:
         self.theme = get_theme(theme)
         self.breakpoints = {**DEFAULT_BREAKPOINTS, **(breakpoints or {})}
         self.containers = {**DEFAULT_CONTAINERS, **(containers or {})}
-        self._cache: dict[tuple[Any, ...], CompiledStyle] = {}
+        self._cache: OrderedDict[tuple[Any, ...], CompiledStyle] = OrderedDict()  # bounded LRU
+        self._max_cache = 10_000  # styles derived from changing data must not grow memory forever
         self._props: dict[str, Callable[[Style, Any], list[tuple[str, str]]]] = self._property_table()
 
     def compile(self, style: Style) -> CompiledStyle:
         key = style.key()
         cached = self._cache.get(key)
         if cached is not None:
+            self._cache.move_to_end(key)
             return cached
         rules: list[Rule] = []
         self._collect(style, (), ("",), rules)
@@ -63,6 +66,8 @@ class StyleCompiler:
         name = "rw-" + hashlib.sha256(canonical.encode()).hexdigest()[:8]
         compiled = CompiledStyle(name, tuple(self._render(name, r) for r in rules))
         self._cache[key] = compiled
+        while len(self._cache) > self._max_cache:
+            self._cache.popitem(last=False)
         return compiled
 
     def declarations(self, style: Style) -> str:

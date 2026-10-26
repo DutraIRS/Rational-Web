@@ -48,6 +48,12 @@ def test_dangerous_urls_rejected(url):
         Node("a", attrs=(("href", url),))
 
 
+@pytest.mark.parametrize("name", ["src", "action", "formaction", "poster", "cite", "data", "xlink:href"])
+def test_every_url_attribute_is_checked(name):
+    with pytest.raises(UnsafeMarkupError):
+        Node("object", attrs=((name, "javascript:alert(1)"),))
+
+
 @pytest.mark.parametrize("url", ["/path", "https://example.com", "mailto:a@b.c", "data:image/png;base64,AA"])
 def test_safe_urls_allowed(url):
     Node("a", attrs=(("href", url),))

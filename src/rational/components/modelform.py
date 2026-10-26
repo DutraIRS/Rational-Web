@@ -78,7 +78,7 @@ def _control(
     common: dict[str, Any] = {"name": name, "help": info.description, "error": error}
 
     if annotation is bool:
-        return Checkbox(label, name=name, checked=bool(value), disabled=disabled)
+        return Checkbox(label, name=name, checked=bool(value), disabled=disabled, help=info.description, error=error)
     options = _options(annotation)
     if options is not None:
         if not required:

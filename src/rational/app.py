@@ -8,7 +8,7 @@ import inspect
 import logging
 import secrets
 import traceback
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from importlib import resources
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -50,6 +50,7 @@ P = TypeVar("P", bound=type[Page])
 T = TypeVar("T", bound=type)
 
 _IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
+SESSION_CHANNEL = "rational:sessions"  # bus channel: "<boot id> <session id>" after each session write
 
 
 class App:
@@ -142,19 +143,22 @@ class App:
         self.logging = Logging()
 
         self.compiler = StyleCompiler(self.theme, breakpoints, containers)
-        self.sessions: SessionBackend = session_store or SessionStore(ttl=session_ttl)
+        self.sessions: SessionBackend = SessionStore(ttl=session_ttl) if session_store is None else session_store
         self.bus = bus
-        self._followed: dict[str, Any] = {}
+        self._following = False
+        self._tasks: set[asyncio.Task[Any]] = set()
         if bus is not None and hasattr(self.sessions, "on_saved"):
             self.sessions.on_saved = self._announce_session
         self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
-        self.routes: dict[type[Page], PageRoute] = {}
+        self.routes: dict[str, PageRoute] = {}  # by route path
+        self._routes_by_class: dict[type[Page], list[PageRoute]] = {}
         self.resume: PageResumer | None = (
             PageResumer(self, page_snapshots, page_snapshot_ttl) if page_snapshots is not None else None
         )
         self.services: list[type] = []
         self.authenticator: Callable[[Context], Any] | None = None
         self._startup: list[Callable[[], Any]] = []
+        self._shutdown: list[Callable[[], Any]] = []
         self._startup_error: BaseException | None = None
         self._requests = 0
 
@@ -228,6 +232,8 @@ class App:
                 ],
                 return_annotation=Response,
             )
+            if path in self.routes:
+                raise TypeError(f"a page is already registered at {path!r} ({self.routes[path].page.__name__})")
             self.fastapi.add_api_route(
                 path,
                 endpoint,
@@ -236,7 +242,8 @@ class App:
                 include_in_schema=False,
                 name=cls.__name__,
             )
-            self.routes[cls] = route
+            self.routes[path] = route
+            self._routes_by_class.setdefault(cls, []).append(route)
             return cls
 
         return decorator
@@ -259,10 +266,25 @@ class App:
             self.on_startup(hook)
 
     def url_for(self, page: type[Page], **params: Any) -> str:
-        return self.routes[page].url(**params)
+        routes = self._routes_by_class.get(page)
+        if not routes:
+            raise KeyError(f"no page registered for {page.__name__}")
+        path = params.pop("_path", None)
+        if len(routes) > 1 and path is None:
+            raise ValueError(
+                f"{page.__name__} is registered at multiple paths ({', '.join(r.path for r in routes)}); "
+                "pass _path=<route> to choose one"
+            )
+        route = routes[0] if path is None else next(r for r in routes if r.path == path)
+        return route.url(**params)
 
     def on_startup(self, fn: Callable[[], Any]) -> Callable[[], Any]:
         self._startup.append(fn)
+        return fn
+
+    def on_shutdown(self, fn: Callable[[], Any]) -> Callable[[], Any]:
+        """Register a shutdown hook (sync or async), run when the app stops."""
+        self._shutdown.append(fn)
         return fn
 
     def authenticate(self, fn: Callable[[Context], Any]) -> Callable[[Context], Any]:
@@ -317,20 +339,20 @@ class App:
             ctx.set_user(user)
         return ctx
 
-    def commit_session(self, ctx: Context) -> bool:
-        """Apply a pending id rotation. Returns True if the browser needs a new cookie."""
+    async def commit_session(self, ctx: Context) -> bool:
+        """Apply a pending id rotation (login, logout). Returns True if the browser needs a new cookie."""
         session = ctx.peek_session()
         if session is None:
             return False
         if session.rotated:
-            self.sessions.rotate(session)
+            await self.sessions.rotate(session)
             session.rotated = False
             ctx.session_created = True
         return ctx.session_created
 
-    def finish(self, request: Request, response: Response, ctx: Context) -> None:
+    async def finish(self, request: Request, response: Response, ctx: Context) -> None:
         """Persist session changes (creation, id rotation) into the response cookie."""
-        if self.commit_session(ctx):
+        if await self.commit_session(ctx):
             secure = self.secure_cookies if self.secure_cookies is not None else request.url.scheme == "https"
             response.set_cookie(
                 SESSION_COOKIE,
@@ -350,15 +372,19 @@ class App:
             try:
                 yield
             finally:
-                created = ctx.peek_session()  # the request may have created the session meanwhile
-                if created is not None:
-                    await self.sessions.save(created)
+                await self._save_session(ctx)  # the request may have created a session meanwhile
             return
         async with session.lock:
             try:
                 yield
             finally:
-                await self.sessions.save(ctx.peek_session() or session)
+                await self._save_session(ctx)
+
+    async def _save_session(self, ctx: Context) -> None:
+        session = ctx.peek_session()
+        if session is not None:
+            await self.commit_session(ctx)  # even if the request failed: never store a login under the old id
+            await self.sessions.save(session)
 
     def data_theme(self, request: Request) -> str | None:
         chosen = request.cookies.get(THEME_COOKIE)
@@ -380,12 +406,16 @@ class App:
     async def _stream(self, request: Request) -> Response:
         return await handle_stream(self, request)
 
-    async def page_for(self, request: Request, page_id: str | None) -> PageRuntime | None:
-        """The live runtime for ``page_id``, resumed from a snapshot when the app keeps them."""
+    async def page_for(self, request: Request, page_id: str | None, *, rev: int | None = None) -> PageRuntime | None:
+        """The live runtime for ``page_id``.
+
+        With page snapshots, it is rebuilt when this process does not hold it, or holds a copy older
+        than revision ``rev`` (the browser's) because another worker handled the latest events.
+        """
         live = self.pages.get(page_id)
-        if live is not None or self.resume is None:
+        if self.resume is None or (live is not None and (rev is None or live.revision >= rev)):
             return live
-        return await self.resume.resume(request, page_id)
+        return await self.resume.resume(request, page_id, rev=rev)
 
     async def _ws(self, websocket: WebSocket) -> None:
         await handle_websocket(self, websocket)
@@ -440,7 +470,7 @@ class App:
         response = PlainTextResponse("Internal Server Error", status_code=500)
         ctx = getattr(request.state, "rational_context", None)
         if isinstance(ctx, Context):
-            self.finish(request, response, ctx)
+            await self.finish(request, response, ctx)
         return response
 
     @staticmethod
@@ -452,49 +482,48 @@ class App:
 
     # -- cross-worker live sessions ------------------------------------------------------------
 
-    @staticmethod
-    def _channel(sid: str) -> str:
-        return f"rational:session:{sid}"
-
     async def _announce_session(self, session: Session) -> None:
-        if self.bus is None:
-            return
+        """``PersistentSessionStore.on_saved``: tell the other workers that ``session`` changed."""
+        assert self.bus is not None
         try:
-            await self.bus.publish(self._channel(session.id), self.boot_id)
+            await self.bus.publish(SESSION_CHANNEL, f"{self.boot_id} {session.id}")
         except Exception:
             log.exception("could not announce a session change")
 
-    def follow_session(self, session: Session) -> None:
-        """Listen for changes other workers make to ``session`` while a page here shows its data."""
-        if self.bus is None or session.id in self._followed:
-            return
+    def follow_sessions(self) -> None:
+        """Hear about session changes made by other workers (a page here shows session data)."""
+        if self.bus is not None and not self._following:
+            self._following = True
+            self._spawn(self._subscribe_sessions())
+
+    async def _subscribe_sessions(self) -> None:
+        assert self.bus is not None
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
+            await self.bus.subscribe(SESSION_CHANNEL, self._on_session_changed)
+        except Exception:
+            self._following = False  # the next page that needs it tries again
+            log.exception("could not follow session changes")
+
+    def _on_session_changed(self, message: str) -> None:
+        origin, _, sid = message.partition(" ")
+        session = self.sessions.get(sid) if origin != self.boot_id else None
+        if session is not None and session.listeners:
+            self._spawn(self.sessions.load(sid))  # merges the newer record and wakes the pages
+
+    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
+        """Run ``coro`` in the background, keeping a reference and logging a failure."""
+        try:
+            task = asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:  # no event loop in this thread
+            coro.close()
             return
-        sid = session.id
-        self._followed[sid] = None  # claimed; the subscription follows
+        self._tasks.add(task)
+        task.add_done_callback(self._reap)
 
-        def on_message(origin: str) -> None:
-            if origin == self.boot_id:
-                return
-            live = self.sessions.get(sid)
-            if live is None or not live.listeners:
-                unsubscribe = self._followed.pop(sid, None)
-                if unsubscribe is not None:
-                    loop.create_task(unsubscribe())
-                return
-            loop.create_task(self.sessions.load(sid))  # a newer version bumps the session and wakes its pages
-
-        async def subscribe() -> None:
-            assert self.bus is not None
-            try:
-                self._followed[sid] = await self.bus.subscribe(self._channel(sid), on_message)
-            except Exception:
-                self._followed.pop(sid, None)
-                log.exception("could not follow session changes")
-
-        loop.create_task(subscribe())
+    def _reap(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("background task failed", exc_info=task.exception())
 
     @asynccontextmanager
     async def _lifespan(self, _app: FastAPI) -> AsyncIterator[None]:
@@ -511,6 +540,13 @@ class App:
         try:
             yield
         finally:
+            for fn in reversed(self._shutdown):
+                try:
+                    result = fn()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    log.exception("error in shutdown hook %r", fn)
             if self.db is not None:
                 await self.db.dispose()
 

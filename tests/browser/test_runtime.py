@@ -91,3 +91,51 @@ def test_todos_end_to_end(browser, todos_app):
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+def echo_app():
+    from rational import App, Button, Page, RemoteError
+    from rational.backend import Service, remote
+
+    app = App()
+
+    @app.service
+    class EchoService(Service):
+        @remote()
+        def shout(self, text: str) -> str:
+            return text.upper()
+
+        @remote(method="GET")
+        def count(self, text: str) -> int:
+            return len(text)
+
+        @remote(path="/api/custom-echo")
+        def custom(self, text: str) -> str:
+            return f"<{text}>"
+
+        @remote()
+        def fail(self) -> None:
+            raise RemoteError("nope")
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Button("Noop", on_click=lambda: None)  # interactive, so the runtime loads
+
+    return app
+
+
+@pytest.mark.parametrize("live", [echo_app()], indirect=True)
+def test_rational_call_reaches_remote_methods(browser, live):
+    page = browser.new_page()
+    page.goto(live)
+    page.wait_for_function("window.rational !== undefined")
+    results = page.evaluate(
+        """async () => [
+            await rational.call("echo", "shout", {text: "hi"}),
+            await rational.call("echo", "count", {text: "four"}, {verb: "GET"}),
+            await rational.call(null, null, {text: "x"}, {path: "/api/custom-echo"}),
+            await rational.call("echo", "fail").catch((e) => e.response.error.message),
+        ]"""
+    )
+    assert results == ["HI", 4, "<x>", "nope"]

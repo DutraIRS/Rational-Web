@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from .events import ClientOp
+from .http import is_local_path
 from .state import State
 
 if TYPE_CHECKING:
@@ -132,7 +133,7 @@ class Component:
 
     def navigate(self, url: str) -> None:
         """After this event, send the browser to ``url`` (same-origin paths only)."""
-        if not url.startswith("/") or url.startswith(("//", "/\\")):
+        if not is_local_path(url):
             raise ValueError(f"navigate() takes a same-origin path like '/todos', not {url!r}")
         self._require_runtime().add_action({"op": "navigate", "url": url})
 

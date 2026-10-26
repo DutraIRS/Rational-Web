@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from .rendering.nodes import validate_attr
 from .styling.theme import ThemeMode
 
 
@@ -63,11 +64,15 @@ class js:  # noqa: N801 - used as a namespace: js.toggle_class(...)
 
     @staticmethod
     def set_attr(name: str, value: str, target: str | None = None) -> ClientOp:
+        """Set an attribute. The renderer's rules apply: no ``on*``/``srcdoc``, no ``javascript:`` URLs."""
+        validate_attr(name, value)
         return ClientOp("set_attr", (target, name, value))
 
     @staticmethod
     def toggle_attr(name: str, on: str = "true", off: str = "false", target: str | None = None) -> ClientOp:
         """Flip ``name`` between two values, e.g. ``aria-expanded``."""
+        validate_attr(name, on)
+        validate_attr(name, off)
         return ClientOp("toggle_attr", (target, name, on, off))
 
     @staticmethod
@@ -81,6 +86,8 @@ class js:  # noqa: N801 - used as a namespace: js.toggle_class(...)
 
     @staticmethod
     def set_theme(mode: ThemeMode) -> ClientOp:
+        if mode not in ("light", "dark", "system"):
+            raise ValueError(f"unknown theme mode {mode!r}; use 'light', 'dark' or 'system'")
         return ClientOp("set_theme", (None, mode))
 
     @staticmethod
