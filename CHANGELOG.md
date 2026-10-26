@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a5] - 2026-10-26
+
 ### Added
 - `rational.security`: scrypt password hashing (`hash_password`, `verify_password`,
   `password_needs_rehash`), JSON Web Tokens (`Tokens`, HS256 only, expiry and issuer checks, and a
