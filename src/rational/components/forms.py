@@ -35,11 +35,7 @@ CONTROL = Style(
     font_size="md",
     line_height=1.4,
     transition=True,
-    focus=Style(
-        border_color="primary",
-        outline="none",
-        shadow="0 0 0 3px color-mix(in srgb, var(--rw-color-primary) 25%, transparent)",
-    ),
+    focus=Style(border_color="primary"),  # the ring is the theme's :focus-visible outline, as everywhere
     placeholder=Style(color="muted"),
     disabled=Style(opacity=0.6, cursor="not-allowed"),
 )

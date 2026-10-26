@@ -118,7 +118,7 @@ def test_keyboard_focus_is_visible(browser):
                   const el = document.activeElement;
                   if (!el || el === document.body) return null;
                   const s = getComputedStyle(el);
-                  return (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== "none";
+                  return (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0);
                 }"""
             )
             if visible is None:
