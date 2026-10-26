@@ -96,6 +96,9 @@ All notable changes to this project are documented here. The format follows
   render order, and reloads if a reconnect shows it missed a batch.
 
 ### Changed
+- The version comes from the git tag (hatch-vcs): tagging `vX.Y.Z` releases X.Y.Z and the docs show
+  it; releases no longer fail because `__version__` was not bumped.
+- Tests enforce 90% branch coverage and a 60-second limit per test; CI jobs stop after 20 minutes.
 - Resumable pages work without sticky routing: a worker whose copy of a page is older than the
   browser's rebuilds it from the snapshot instead of answering 409, and snapshot writes are
   compare-and-swap, so two workers cannot both advance one page.
@@ -112,6 +115,7 @@ All notable changes to this project are documented here. The format follows
   GitHub workflow tokens are read-only by default.
 
 ### Fixed
+- Form fields had no visible keyboard focus in Safari/WebKit; they now use the theme's focus ring.
 - A login in an event handler with a persistent session store answered with the old CSRF token, so
   the next event failed with 403.
 - Session rotation state was kept on the shared `App` object, so concurrent requests could rotate

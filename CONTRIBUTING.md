@@ -33,7 +33,7 @@ $ python -m sphinx -W -b html docs docs/_build/html
 
 ## Releasing (maintainers)
 
-1. Update `__version__` in `src/rational/__init__.py` and move *Unreleased* entries in
-   `CHANGELOG.md` under the new version.
-2. Tag `vX.Y.Z` and push the tag. The *Release* workflow builds, checks, and publishes to PyPI
-   through trusted publishing.
+1. Move *Unreleased* entries in `CHANGELOG.md` under the new version and commit.
+2. Tag `vX.Y.Z` and push the tag. The version comes from the tag (there is no version number to
+   edit); the *Release* workflow builds, checks, and publishes to PyPI through trusted publishing,
+   and the docs are rebuilt with that version.

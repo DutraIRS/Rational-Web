@@ -4,6 +4,8 @@ Pages and components render on the server; a tiny browser runtime wires up
 events and applies patches. Styles are typed Python values compiled to CSS.
 """
 
+from importlib import metadata as _metadata
+
 from .app import App
 from .assets import Adapter, Asset, bootstrap, cx, tailwind
 from .bus import Bus, MemoryBus, RedisBus
@@ -63,7 +65,10 @@ from .state import Binding, State, computed, watch
 from .stores import PersistentSessionStore, RedisSessionDriver
 from .styling import Breakpoint, Style, Theme
 
-__version__ = "0.1.0a2"
+try:
+    __version__ = _metadata.version("rational")  # from the git tag, at install time
+except _metadata.PackageNotFoundError:  # pragma: no cover - running from a source tree that was never installed
+    __version__ = "0+unknown"
 
 __all__ = [
     "Adapter",

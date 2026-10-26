@@ -13,7 +13,7 @@ import rational  # noqa: E402
 project = "Rational Web"
 author = "Iago Riveiro Santos Dutra"
 copyright = "2026, Iago Riveiro Santos Dutra (public domain, Unlicense)"
-release = rational.__version__
+release = rational.__version__.split("+")[0]  # the tag, or e.g. 0.2.0.dev3 between tags
 version = ".".join(release.split(".")[:2])
 
 extensions = [
