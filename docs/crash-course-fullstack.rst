@@ -23,7 +23,7 @@ The mental model in three sentences
 1. **Your components are server-side Python objects.** Their ``render()`` produces HTML on the
    server, and ``State`` attributes are reactivity roots: writing one marks the components that
    read it dirty, and the server sends back just their HTML.
-2. **The browser is a thin delivery mechanism.** A ~4 KiB runtime wires events to the server,
+2. **The browser is a thin delivery mechanism.** An ~8 KiB runtime wires events to the server,
    applies the HTML patches (preserving focus and caret), and runs the small closed set of
    ``js.*`` operations locally. There is no client-side component tree, no hydration, no virtual
    DOM, and no client router.

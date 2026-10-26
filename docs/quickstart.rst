@@ -62,7 +62,7 @@ What just happened
 1. ``GET /`` created a ``Home`` page, rendered it to HTML on the server and compiled
    only the CSS it uses.
 2. Because the page has an event handler, the response also carries a small manifest
-   and ``runtime.js`` (≈4 KiB gzipped). Static pages get neither.
+   and ``runtime.js`` (≈8 KiB gzipped). Static pages get neither.
 3. Typing sends the (debounced) value to ``set_name`` over HTTP. The value is
    validated against the ``str`` annotation, ``name`` changes, and only the components
    that read ``name`` are re-rendered and patched into the page.

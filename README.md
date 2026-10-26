@@ -55,7 +55,7 @@ Rational Web keeps the whole application in Python **without pretending the brow
 there**:
 
 - **Server-rendered first.** Every page is real HTML before any script runs. Static pages ship
-  zero JavaScript. Interactive pages load a 4 KiB (gzipped) runtime that wires events and
+  zero JavaScript. Interactive pages load an 8 KiB (gzipped) runtime that wires events and
   morphs updated HTML into place, preserving focus and typing.
 - **Explicit boundaries.** Event handlers always run on the server. Only methods marked
   `@remote` become an HTTP API. Nothing is callable from the browser by accident.
@@ -153,7 +153,7 @@ an equivalent *pre-built* HTML string. Measured on Python 3.14.7, Windows 11, In
 
 | On the wire | gzip |
 |---|---:|
-| `runtime.js` (interactive pages only, cached) | 4.0 KiB |
+| `runtime.js` (interactive pages only, cached) | 8.3 KiB |
 | Theme CSS (immutable, cached) | 1.2 KiB |
 | A click's response | 0.2 KiB |
 
@@ -202,8 +202,8 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Finer-grained server diffs (text and attribute patches)
 - [x] More components: `Modal`, `Tabs`, `Table`, `Toast`, `Menu`, with keyboard support for tabs and menus
 - [x] Pluggable session store: `PersistentSessionStore` with a Redis driver (logins and API work on
-      any worker and survive restarts); page runtimes remain worker-local, so interactive pages on
-      several workers still need sticky routing
+      any worker and survive restarts), and resumable pages, so interactive pages work on several
+      workers without sticky routing
 
 **0.3: productivity**
 - [x] `rational new` project scaffolding
@@ -215,10 +215,17 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Internationalization
 - [x] Optional Bootstrap and Tailwind adapters
 
+**0.4: client side and batteries**
+- [x] Client components: Python compiled to JavaScript, rendered by the server first, hydrated in the browser
+- [x] `@computed`, `@watch`, two-way `bind=`, `provide`/`inject`, view transitions
+- [x] Passwords, JSON Web Tokens, signing and encryption (`rational.security`), app cookies
+- [x] `Repository` for typed CRUD and pagination; `Socket` classes with rooms across workers
+
 **1.0: stability**
 - [ ] Frozen public API with a deprecation policy
-- [ ] Accessibility audit and an automated a11y suite
-- [ ] Browser matrix in CI (Chromium, Firefox, WebKit) and load tests
+- [ ] Accessibility audit (a structural a11y suite runs in CI)
+- [x] Browser matrix in CI (Chromium, Firefox, WebKit)
+- [ ] Load tests
 - [ ] Independent security review
 
 Have an idea? Open an issue. The roadmap is a conversation. Longer-term design notes on

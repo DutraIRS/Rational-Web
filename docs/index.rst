@@ -34,7 +34,8 @@ one consistent, typed, inspectable API. It is built on FastAPI, Pydantic and SQL
        app.run()   # python app.py --dev   |   python app.py --prod
 
 * **Server-rendered first.** Every page is real HTML before any script runs. Static pages ship no
-  JavaScript at all; interactive pages load a ~4 KiB runtime.
+  JavaScript at all; interactive pages load an ~8 KiB runtime, and pages
+  with client components ~10 KiB more.
 * **Explicit boundaries.** Event handlers run on the server; only ``@remote`` methods form an
   HTTP API, documented in Swagger UI. Nothing is callable from the browser by accident.
 * **Typed boundaries.** Path parameters, event payloads and API bodies are validated from your

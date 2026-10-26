@@ -67,8 +67,11 @@ Python 3.14.7, Windows 11, Intel Core (Tiger Lake), single process.
      - Raw
      - gzip
    * - ``runtime.js`` (interactive pages only)
-     - 12.4 KiB
-     - 4.0 KiB
+     - 28.5 KiB
+     - 8.3 KiB
+   * - ``islands.js`` (pages with client components only)
+     - 34.7 KiB
+     - 10.1 KiB
    * - Theme CSS (immutable, cached)
      - 4.3 KiB
      - 1.2 KiB
@@ -87,7 +90,8 @@ Reading the numbers
 * An interaction costs well under a millisecond of server time; network latency dominates.
 * Cost grows with the number of elements, ≈18 µs per element including styling. Very
   large pages (thousands of rows) should paginate or virtualize, as in any SSR framework.
-* The browser downloads about 4 KiB of JavaScript, once, and only for interactive pages.
+* The browser downloads about 8 KiB of JavaScript, once, and only for interactive pages
+  (about 10 KiB more on pages with client components).
 
 Is it "blazingly fast"? It is Python, so no — not in the sense of Rust or Go servers. It
 is designed so that the framework is never the bottleneck of a typical page, and so that
