@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
+import os
 import secrets
 import traceback
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
@@ -35,6 +36,7 @@ from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
 from .session import Session, SessionBackend, SessionStore, TTLStore
+from .sockets import Rooms
 from .styling.compiler import StyleCompiler
 from .styling.responsive import Breakpoint
 from .styling.theme import Theme, ThemeMode, get_theme
@@ -49,6 +51,7 @@ log = logging.getLogger("rational")
 
 P = TypeVar("P", bound=type[Page])
 T = TypeVar("T", bound=type)
+S = TypeVar("S", bound=type)
 
 _IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
 SESSION_CHANNEL = "rational:sessions"  # bus channel: "<boot id> <session id>" after each session write
@@ -103,6 +106,7 @@ class App:
         page_snapshot_ttl: int = 60 * 60 * 24,
         bus: Bus | None = None,
         i18n: I18n | None = None,
+        secret_key: str | None = None,
         adapter: Adapter | None = None,
         stylesheets: Sequence[str | Asset] = (),
         scripts: Sequence[str | Asset] = (),
@@ -117,6 +121,7 @@ class App:
         self.fine_patches = fine_patches
         self.websocket = websocket and not api_only
         self.i18n = i18n
+        self._secret_key = secret_key or os.environ.get("RATIONAL_SECRET_KEY")
         if adapter is not None and adapter.needs_inline_styles and csp:
             raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
         self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
@@ -150,6 +155,7 @@ class App:
         self.bus = bus
         self._following = False
         self._tasks: set[asyncio.Task[Any]] = set()
+        self.rooms = Rooms(self)  # WebSocket rooms (Socket.join / publish)
         if bus is not None and hasattr(self.sessions, "on_saved"):
             self.sessions.on_saved = self._announce_session
         self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
@@ -260,6 +266,19 @@ class App:
 
         return decorator
 
+    def socket(self, path: str) -> Callable[[S], S]:
+        """Register a :class:`~rational.Socket` class to answer WebSocket connections at ``path``."""
+
+        def decorator(cls: S) -> S:
+            from .sockets import Socket, socket_endpoint
+
+            if not (isinstance(cls, type) and issubclass(cls, Socket)):
+                raise TypeError("@app.socket decorates Socket subclasses")
+            self.fastapi.add_api_websocket_route(path, socket_endpoint(self, cls))
+            return cls
+
+        return decorator
+
     def service(self, cls: T) -> T:
         """Register a ``Service``: each ``@remote`` method becomes a typed HTTP endpoint."""
         from .backend.services import register_service
@@ -362,10 +381,26 @@ class App:
             ctx.session_created = True
         return ctx.session_created
 
+    @property
+    def secret_key(self) -> str:
+        """The app's secret for signed and encrypted cookies: ``App(secret_key=...)`` or ``RATIONAL_SECRET_KEY``.
+
+        In development a random one is made up per process (signed cookies then reset on restart).
+        """
+        if self._secret_key is None:
+            if not self.debug:
+                raise RuntimeError(
+                    "signed and encrypted cookies need a secret: App(secret_key=...) or RATIONAL_SECRET_KEY "
+                    '(python -c "import secrets; print(secrets.token_urlsafe(32))")'
+                )
+            self._secret_key = secrets.token_urlsafe(32)
+        return self._secret_key
+
     async def finish(self, request: Request, response: Response, ctx: Context) -> None:
-        """Persist session changes (creation, id rotation) into the response cookie."""
+        """Persist session changes (creation, id rotation) and cookies set during the request."""
+        secure = self.secure_cookies if self.secure_cookies is not None else request.url.scheme == "https"
+        ctx.apply_cookies(response, secure=secure)
         if await self.commit_session(ctx):
-            secure = self.secure_cookies if self.secure_cookies is not None else request.url.scheme == "https"
             response.set_cookie(
                 SESSION_COOKIE,
                 ctx.session.id,

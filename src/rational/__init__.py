@@ -58,6 +58,7 @@ from .i18n import I18n
 from .logging import Logging
 from .rendering import h, unsafe_html
 from .router import Router
+from .sockets import Socket
 from .state import Binding, State, computed, watch
 from .stores import PersistentSessionStore, RedisSessionDriver
 from .styling import Breakpoint, Style, Theme
@@ -117,6 +118,7 @@ __all__ = [
     "Section",
     "Select",
     "Skeleton",
+    "Socket",
     "Spacer",
     "Stack",
     "State",

@@ -79,6 +79,7 @@ Not sure where *you* should start?
    client-components
    styling
    services
+   batteries
    projects
    running
    serverless

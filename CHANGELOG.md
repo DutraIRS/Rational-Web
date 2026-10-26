@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `rational.security`: scrypt password hashing (`hash_password`, `verify_password`,
+  `password_needs_rehash`), JSON Web Tokens (`Tokens`, HS256 only, expiry and issuer checks, and a
+  bearer-token `authenticator` for `app.authenticate`), tamper-proof `Signer` values and AES-GCM
+  `Box` encryption (`pip install "rational[crypto]"`). Standard library only, except `Box`.
+- App cookies: `ctx.cookies.get/set/delete`, plain, signed or encrypted, with safe defaults;
+  `App(secret_key=...)` / `RATIONAL_SECRET_KEY`.
+- `Repository(db, Model)`: typed CRUD and `page()` pagination, each call in its own transaction.
+- WebSockets: `@app.socket(path)` with `Socket` classes (validated JSON messages, origin, session and
+  auth checks, size and rate limits) and rooms that reach every worker through the bus.
+- A "batteries" guide: auth, tokens, secrets, cookies, data, sessions and live connections.
 - Reactivity: `@computed` (derived values cached until their state changes, with correct dependencies
   for every reader), `@watch("name")` (batched, sync or async reactions that run before re-rendering),
   `bind=self.bind("name")` two-way binding on `Input`, `Textarea`, `Select` and `Checkbox` (typed,

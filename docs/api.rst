@@ -94,6 +94,21 @@ Sessions
 .. automodule:: rational.stores
    :members: PersistentSessionStore, RedisSessionDriver, MemorySessionDriver, SessionDriver
 
+Security, cookies and sockets
+-----------------------------
+
+.. automodule:: rational.security
+   :members: hash_password, verify_password, password_needs_rehash, Tokens, Signer, Box, InvalidToken
+
+.. autoclass:: rational.cookies.Cookies
+   :members: get, set, delete
+
+.. autoclass:: rational.Socket
+   :members: connect, receive, disconnect, send, join, leave, publish
+
+.. autoclass:: rational.backend.database.Repository
+   :members:
+
 Errors and redirects
 --------------------
 

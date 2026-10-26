@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 
     from .app import App
     from .backend.database import Database
+    from .cookies import Cookies
     from .session import Session
 
 from ._tracking import track_read
@@ -31,6 +32,21 @@ class Context:
         self.session_created = False
         self._user: Any = _UNRESOLVED
         self._locale: str | None = None
+        self._cookies: Cookies | None = None
+        self.websocket: Any = None  # set for Socket connections, which have no request
+
+    @property
+    def cookies(self) -> Cookies:
+        """This request's cookies, and the ones to set on the response (see :mod:`rational.cookies`)."""
+        if self._cookies is None:
+            from .cookies import Cookies
+
+            self._cookies = Cookies(self)
+        return self._cookies
+
+    def apply_cookies(self, response: Any, *, secure: bool) -> None:
+        if self._cookies is not None:
+            self._cookies.apply(response, secure=secure)
 
     @property
     def session(self) -> Session:
