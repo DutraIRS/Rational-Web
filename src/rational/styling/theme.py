@@ -131,6 +131,7 @@ BASE_CSS = (
     "a{color:var(--rw-color-primary)}"
     ":focus-visible{outline:2px solid var(--rw-color-focus);outline-offset:2px}"
     "[hidden]{display:none!important}"
+    "rw-island,rw-slot{display:contents}"
     "[aria-invalid=true]{border-color:var(--rw-color-danger)!important}"
     ".rw-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;"
     "clip:rect(0,0,0,0);white-space:nowrap;border:0}"

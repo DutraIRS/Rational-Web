@@ -103,6 +103,11 @@ def _is_url_attr(name: str) -> bool:
     return lowered in _URL_ATTRS
 
 
+def is_url_attribute(name: str) -> bool:
+    """True if attribute ``name`` holds a URL (``href``, ``src``...). Raises for names that are never allowed."""
+    return _is_url_attr(name)
+
+
 def check_url(value: str) -> None:
     normalized = _CONTROL_RE.sub("", value).lower()
     if normalized.startswith("data:image/") and not normalized.startswith("data:image/svg"):

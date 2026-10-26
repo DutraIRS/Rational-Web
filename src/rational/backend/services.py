@@ -102,6 +102,7 @@ def register_service(app: App, cls: type) -> None:
     for name, fn in inspect.getmembers(cls, predicate=inspect.isfunction):
         spec: RemoteSpec | None = getattr(fn, "__rw_remote__", None)
         if spec is not None:
+            fn.__rw_service__ = cls  # type: ignore[attr-defined]  # ClientComponent.remote(Service.method) finds its route
             _add_route(app, cls, name, fn, spec)
 
 

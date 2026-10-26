@@ -70,7 +70,8 @@ def _replace(new: Node, path: list[int], old_tag: str, edits: list[Edit]) -> boo
 def _diff(old: Node, new: Node, path: list[int], edits: list[Edit]) -> bool:
     if old is new or old == new:
         return True
-    if old.tag != new.tag or _identity(old) != _identity(new):
+    if old.tag != new.tag or _identity(old) != _identity(new) or old.tag == "rw-island":
+        # A client component's inside belongs to the browser: send it whole, the browser keeps its state.
         return _replace(new, path, old.tag, edits)
 
     old_kids, new_kids = _children(old), _children(new)

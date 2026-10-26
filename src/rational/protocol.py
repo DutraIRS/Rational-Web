@@ -22,7 +22,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import dev
 from .errors import InvalidInput, RationalError, Redirect
-from .http import SESSION_COOKIE, csrf_ok, json_error
+from .http import SESSION_COOKIE, base_path, csrf_ok, json_error
 from .runtime import PageRuntime, StaleHandlerError
 
 if TYPE_CHECKING:
@@ -160,6 +160,10 @@ async def handle_event(app: App, request: Request) -> Response:
             }
             if error is not None:
                 payload["error"] = error
+            scripts = runtime.take_scripts()
+            if scripts:
+                base = base_path(request)
+                payload["load"] = [base + src for src in scripts]
             if await app.commit_session(ctx):
                 payload["csrf"] = session.csrf
             response = JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})

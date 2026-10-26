@@ -30,8 +30,12 @@ class Frame:
     def next_dom_id(self, hint: str = "el") -> str:
         """A DOM id that is unique on the page and stable across rerenders."""
         self.id_seq += 1
-        slug = _SLUG_RE.sub("-", hint).strip("-").lower()[:24] or "el"
-        return f"{self.component.cid}-{slug}-{self.id_seq}"
+        return f"{self.component.cid}-{dom_slug(hint)}-{self.id_seq}"
+
+
+def dom_slug(hint: str) -> str:
+    """The readable part of a generated DOM id (client components build ids the same way)."""
+    return _SLUG_RE.sub("-", hint).strip("-").lower()[:24] or "el"
 
 
 current_frame: ContextVar[Frame | None] = ContextVar("rational_frame", default=None)

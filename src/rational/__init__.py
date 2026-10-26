@@ -7,6 +7,7 @@ events and applies patches. Styles are typed Python values compiled to CSS.
 from .app import App
 from .assets import Adapter, Asset, bootstrap, cx, tailwind
 from .bus import Bus, MemoryBus, RedisBus
+from .client import ClientComponent
 from .component import Component, Page
 from .components import (
     Article,
@@ -77,6 +78,7 @@ __all__ = [
     "ButtonLink",
     "Card",
     "Checkbox",
+    "ClientComponent",
     "Column",
     "Component",
     "Container",

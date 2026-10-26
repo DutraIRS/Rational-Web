@@ -28,13 +28,15 @@ from .component import Component, Page
 from .concurrency import invoke
 from .diff import diff
 from .errors import RationalError
-from .rendering.builder import normalize_children
+from .http import base_path
+from .rendering.builder import h, normalize_children
 from .rendering.html import to_html
-from .rendering.nodes import Node, RawHTML, TextNode
+from .rendering.nodes import AttrValue, Node, RawHTML, TextNode
 from .styling.compiler import StyleSheet
 from .styling.style import merge
 
 if TYPE_CHECKING:
+    from .client.compiler import ClientModule
     from .context import Context
 
 MAX_FLUSH_PASSES = 8
@@ -89,6 +91,9 @@ class PageRuntime:
         self.closed = False
         self.wants_stream = False
         self.tasks: dict[asyncio.Task[None], str] = {}
+        # Client components: the compiled modules this page uses, and the scripts the browser still needs.
+        self.islands: dict[str, ClientModule] = {}
+        self._new_scripts: list[str] = []
         self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._push_scheduled = False
         self._pushers: set[asyncio.Task[None]] = set()
@@ -144,6 +149,10 @@ class PageRuntime:
 
         frame = Frame(self, comp)
         token = current_frame.set(frame)
+        client = comp._rw_client
+        children = comp.children
+        if client and children:
+            comp.children = (h("rw-slot", *children),)  # server-rendered children, kept as they are in the browser
         try:
             output = comp.render()
             if inspect.isawaitable(output):
@@ -155,15 +164,67 @@ class PageRuntime:
             raise
         finally:
             current_frame.reset(token)
+            comp.children = children
 
         if len(items) == 1 and isinstance(items[0], Node):
             root = items[0]
-            if comp.style is not None:
+            if comp.style is not None and not client:
                 root = replace(root, style=merge(root.style, comp.style))
         else:
-            root = Node("div", children=tuple(items), style=comp.style)
-        resolved = await self._resolve_node(root, frame, Counter())
+            root = Node("div", children=tuple(items), style=None if client else comp.style)
+        resolved = await self._resolve_node(root, frame, Counter(), client=client)
+        if client:
+            resolved = self._island(comp, resolved)
         return replace(resolved, attrs=(*resolved.attrs, ("data-rw-c", cid)))
+
+    def _island(self, comp: Component, root: Node) -> Node:
+        """Wrap a client component's first render with what the browser needs to take it over."""
+        app = self.context.app
+        if app is None:
+            raise RuntimeError("client components need an App")
+        module = app.client_module(type(comp))
+        assert module is not None
+        self._use_module(module)
+        attrs: list[tuple[str, AttrValue]] = [
+            ("data-rw-island", module.key),
+            ("data-rw-uid", str(comp.cid)),
+            ("data-rw-props", _island_json(comp, {n: getattr(comp, n) for n in comp._rw_props}, "props")),
+            ("data-rw-state", _island_json(comp, comp._rw_state, "state")),
+        ]
+        if comp.style is not None and comp.style:
+            extra = self.sheet.use(comp.style)
+            attrs.append(("data-rw-class", extra))
+            own = str(root.attr("class") or "")
+            rest = tuple((n, v) for n, v in root.attrs if n != "class")
+            root = replace(root, attrs=(("class", f"{own} {extra}".strip()), *rest))
+        return Node("rw-island", attrs=tuple(attrs), children=(root,))
+
+    def _use_module(self, module: ClientModule) -> None:
+        """Ship ``module`` (its script and every style it may need), and the modules it creates in the browser."""
+        if module.path in self.islands:
+            return
+        self.islands[module.path] = module
+        if self.served:
+            self._new_scripts.append(module.path)
+        for style in module.styles:  # the browser may render any of its states without asking the server
+            self.sheet.use(style)
+        app = self.context.app
+        assert app is not None
+        for child in module.children:
+            child_module = app.client_module(child)
+            if child_module is not None:
+                self._use_module(child_module)
+
+    def take_scripts(self) -> list[str]:
+        """Client component scripts that became necessary after the page was served (once each)."""
+        if not self._new_scripts:
+            return []
+        scripts, self._new_scripts = self._new_scripts, []
+        app = self.context.app
+        assert app is not None
+        if len(scripts) == len(self.islands):  # the page had none before: the island runtime comes first
+            scripts.insert(0, app.islands_src)
+        return scripts
 
     async def _mount_or_reuse(self, comp: Component, path: str, parent: str | None) -> Component:
         existing_cid = self.paths.get(path)
@@ -190,11 +251,18 @@ class PageRuntime:
             await result
         return comp
 
-    async def _resolve(self, items: tuple[Any, ...], frame: Frame, counts: Counter[str]) -> list[Any]:
+    async def _resolve(
+        self, items: tuple[Any, ...], frame: Frame, counts: Counter[str], client: bool = False
+    ) -> list[Any]:
         out: list[Any] = []
         owner = frame.component
         for item in items:
             if isinstance(item, Component):
+                if client and not item._rw_client:
+                    raise TypeError(
+                        f"{type(owner).__name__} is a client component, so it can only render client components; "
+                        f"pass {type(item).__name__} in as a child instead"
+                    )
                 name = type(item).__name__
                 if item.key is not None:
                     segment = f"{name}#{item.key}"
@@ -203,14 +271,15 @@ class PageRuntime:
                     counts[name] += 1
                 out.append(await self._render_component(item, f"{owner.path}/{segment}", owner.cid))
             elif isinstance(item, Node):
-                out.append(await self._resolve_node(item, frame, counts))
+                out.append(await self._resolve_node(item, frame, counts, client=client))
             elif isinstance(item, (TextNode, RawHTML)):
                 out.append(item)
             else:
-                out.extend(await self._resolve(tuple(normalize_children([item])), frame, counts))
+                out.extend(await self._resolve(tuple(normalize_children([item])), frame, counts, client))
         return out
 
-    async def _resolve_node(self, node: Node, frame: Frame, counts: Counter[str]) -> Node:
+    async def _resolve_node(self, node: Node, frame: Frame, counts: Counter[str], client: bool = False) -> Node:
+        """``client``: the node belongs to a client component's own render, whose handlers run in the browser."""
         attrs = [(n, v) for n, v in node.attrs if n != "class"]
         classes = [str(node.attr("class"))] if node.attr("class") else []
         if node.style is not None and node.style:
@@ -220,14 +289,15 @@ class PageRuntime:
         if any(n == "data-rw-menu" for n, _ in attrs):
             self.interactive = True  # the runtime script provides the menu's keyboard support
         for event, handler in node.events:
-            attrs.append((f"data-rw-on-{event}", self._register(frame, handler, event)))
+            if not client:  # a client component's handlers are attached by the browser when it takes over
+                attrs.append((f"data-rw-on-{event}", self._register(frame, handler, event)))
         for event, ops in node.client:
             payload = json.dumps([op.to_json() for op in ops], separators=(",", ":"))
             attrs.append((f"data-rw-js-{event}", payload))
             self.interactive = True
         if node.key is not None:
             attrs.append(("data-rw-key", node.key))
-        children = await self._resolve(node.children, frame, counts)
+        children = await self._resolve(node.children, frame, counts, client and node.tag != "rw-slot")
         return Node(node.tag, attrs=tuple(attrs), children=tuple(children))
 
     # -- handlers & dependencies -----------------------------------------------------------
@@ -319,15 +389,19 @@ class PageRuntime:
                     return
                 patches = await self.flush()
                 self.seq += 1
-                self.publish(
-                    {
-                        "v": 1,
-                        "seq": self.seq,
-                        "patches": patches,
-                        "css": self.sheet.drain(),
-                        "actions": self.take_actions(),
-                    }
-                )
+                batch: dict[str, Any] = {
+                    "v": 1,
+                    "seq": self.seq,
+                    "patches": patches,
+                    "css": self.sheet.drain(),
+                    "actions": self.take_actions(),
+                }
+                scripts = self.take_scripts()
+                if scripts:
+                    request = self.context.request
+                    base = base_path(request) if request is not None else ""
+                    batch["load"] = [base + src for src in scripts]
+                self.publish(batch)
                 resumer = getattr(self.context.app, "resume", None)
                 if resumer is not None:
                     await resumer.save(self)
@@ -512,3 +586,11 @@ class PageRuntime:
             return False
         self.tokens -= 1
         return True
+
+
+def _island_json(comp: Component, values: dict[str, Any], what: str) -> str:
+    data = {k: v for k, v in values.items() if not callable(v)}  # callbacks reach the browser from a parent island
+    try:
+        return json.dumps(data, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as e:
+        raise TypeError(f"{type(comp).__name__}: a client component's {what} must be JSON data ({e})") from None

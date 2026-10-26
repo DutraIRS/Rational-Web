@@ -24,7 +24,7 @@ const browser = [
   "AbortController", "CSS", "CustomEvent", "DOMParser", "Element", "Event", "EventSource", "FormData",
   "HTMLInputElement", "HTMLOptionElement", "HTMLSelectElement", "HTMLTextAreaElement", "URL", "URLSearchParams",
   "WebSocket", "clearTimeout", "console", "document", "fetch", "history", "location", "matchMedia", "navigator",
-  "setTimeout", "window",
+  "queueMicrotask", "setTimeout", "window",
 ];
 
 export default [

@@ -149,9 +149,18 @@ class PageRoute:
                 "nav": app.client_nav,
                 "debug": app.debug,
             }
-        elif app.client_nav:
-            # No events here, but the runtime still handles link clicks.
-            manifest = {"v": PROTOCOL_VERSION, "nav": True, "base": base, "debug": app.debug}
+        elif app.client_nav or runtime.islands:
+            # No server events here, but the runtime still handles links and client components.
+            current = ctx.peek_session()
+            manifest = {
+                "v": PROTOCOL_VERSION,
+                "nav": app.client_nav,
+                "base": base,
+                "api": base + app.api_prefix,
+                "csrf": current.csrf if current is not None else None,
+                "debug": app.debug,
+            }
+        scripts = [base + app.islands_src, *(base + path for path in runtime.islands)] if runtime.islands else []
         runtime.sheet.drain()
         nonce = secrets.token_urlsafe(16) if app.csp else None
         html = render_document(
@@ -167,6 +176,7 @@ class PageRoute:
             nonce=nonce,
             favicon=app.favicon,
             head_extra=app.head_extra(nonce, base),
+            scripts=scripts,
         )
         response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
         security_headers(response, nonce, style_origins=app.style_origins, script_origins=app.script_origins)

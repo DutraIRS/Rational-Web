@@ -4,13 +4,16 @@
 theme stylesheet and every directory mounted with ``app.static``. The result can be hosted on
 any static file host (GitHub Pages, Netlify, S3, ...).
 
-Only pages that are fully static can be exported: no path parameters, no sign-in requirement
-and no interactivity (an interactive page needs the live server for its events). Everything
-else is reported as skipped rather than exported broken.
+Only pages that work without a server can be exported: no path parameters, no sign-in
+requirement and no server events. Client components are fine: they run in the browser, so the
+runtime scripts and their compiled modules are exported with the pages. Everything else is
+reported as skipped rather than exported broken.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 from collections.abc import MutableMapping
 from dataclasses import dataclass, field
@@ -24,6 +27,7 @@ if TYPE_CHECKING:
     from .app import App
 
 RUNTIME_PATH = b"/_rational/runtime.js"
+_MANIFEST = re.compile(rb'<script type="application/json" id="rw-manifest">(.*?)</script>', re.DOTALL)
 
 
 @dataclass
@@ -44,6 +48,7 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
     root = Path(out)
     base = base_path.rstrip("/")
     report = ExportReport()
+    scripts = False
     was_debug, app.debug = app.debug, False
     was_nav, app.client_nav = app.client_nav, False  # an exported site has no runtime to navigate with
     try:
@@ -60,11 +65,12 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
                 if status != 200:
                     report.skipped.append((route.path, f"{name} answered HTTP {status}"))
                     continue
-                if RUNTIME_PATH in body:
-                    report.skipped.append((route.path, f"{name} is interactive and needs a live server"))
+                if _needs_server(body):
+                    report.skipped.append((route.path, f"{name} has server events and needs a live server"))
                     continue
                 _write(root, _page_file(route.path), body)
                 report.pages.append(route.path)
+                scripts = scripts or RUNTIME_PATH in body
 
             if report.pages:
                 _write(root, "_rational/theme.css", app.theme_css.encode())
@@ -72,6 +78,12 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
                 status, body = await _get(app, "/__rational_not_found__", base)
                 if status == 404 and b"<html" in body:
                     _write(root, "404.html", body)
+            if scripts:  # pages with client components: the browser runtime and every compiled module
+                files = {"/_rational/runtime.js": app.runtime_js, "/_rational/islands.js": app.islands_js}
+                files.update({module.path: module.js for module in app.client_modules})
+                for path, text in files.items():
+                    _write(root, path.lstrip("/"), text.encode())
+                    report.assets.append(path)
             for mount in app.fastapi.routes:
                 directory = _static_directory(mount)
                 if directory is not None and isinstance(mount, Mount):
@@ -81,6 +93,12 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
         app.debug = was_debug
         app.client_nav = was_nav
     return report
+
+
+def _needs_server(body: bytes) -> bool:
+    """True if the page talks to its server-side view (a manifest with a page id)."""
+    match = _MANIFEST.search(body)
+    return match is not None and "page" in json.loads(match.group(1))
 
 
 def _page_file(path: str) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from .rendering.html import escape_attr, escape_text
@@ -28,7 +29,9 @@ def render_document(
     nonce: str | None = None,
     favicon: str | None = None,
     head_extra: str = "",
+    scripts: Sequence[str] = (),
 ) -> str:
+    """The page. ``scripts`` load after the runtime, in order (client component modules)."""
     nonce_attr = f' nonce="{escape_attr(nonce)}"' if nonce else ""
     html_attrs = f' lang="{escape_attr(lang)}"'
     if data_theme:
@@ -51,4 +54,5 @@ def render_document(
             f'<script type="application/json" id="rw-manifest">{json_for_script(manifest)}</script>'
             f'<script src="{escape_attr(runtime_src)}" defer{nonce_attr}></script>'
         )
+        tail += "".join(f'<script src="{escape_attr(src)}" defer data-rw-load{nonce_attr}></script>' for src in scripts)
     return f"<!doctype html><html{html_attrs}><head>{''.join(head)}</head><body>{body}{tail}</body></html>"

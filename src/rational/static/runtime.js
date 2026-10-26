@@ -33,14 +33,16 @@
   function handle(e, name) {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    const el = target.closest(`[data-rw-on-${name}],[data-rw-js-${name}]`);
+    const el = target.closest(`[data-rw-on-${name}],[data-rw-js-${name}],[data-rw-x-${name}]`);
     if (!el) return;
     const ops = el.getAttribute(`data-rw-js-${name}`);
     const handler = el.getAttribute(`data-rw-on-${name}`);
-    if (handler && (name === "submit" || name === "enter" || (name === "click" && el.closest("a[href]")))) {
+    const local = el.getAttribute(`data-rw-x-${name}`);  // a client component's handler: runs right here
+    if ((handler || local) && (name === "submit" || name === "enter" || (name === "click" && el.closest("a[href]")))) {
       e.preventDefault();
     }
     if (ops && runOps(JSON.parse(ops), el) === false) { e.preventDefault(); return; }
+    if (local && window.rational._islandEvent) window.rational._islandEvent(local, name, el, payloadFor(name, el, e));
     if (!handler) { pendingSnapshot = null; return; }
     if (name === "click" && (el.disabled || el.getAttribute("aria-disabled") === "true")) return;
     if (name === "input") {
@@ -191,8 +193,21 @@
     };
   }
 
+  // Scripts a response or a new page needs (client component modules), in order, each once.
+  function load(srcs) {
+    for (const src of srcs || []) {
+      if (Array.from(document.scripts).some((s) => s.getAttribute("src") === src)) continue;
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = false;
+      script.setAttribute("data-rw-load", "");
+      document.head.appendChild(script);
+    }
+  }
+
   function apply(data) {
     if (typeof data.seq === "number" && data.seq > lastSeq) lastSeq = data.seq;
+    load(data.load);
     if (typeof data.rev === "number") rev = data.rev;
     if (data.csrf) M.csrf = data.csrf;
     if (data.css && data.css.length) insertCss(data.css);
@@ -300,7 +315,9 @@
   // ---- morphing --------------------------------------------------------------------------
   function keyOf(n) {
     if (n.nodeType !== 1) return null;
-    return n.getAttribute("data-rw-key") ?? n.getAttribute("data-rw-c") ?? (n.id || null);
+    // An island's server id is unknown to a parent island that re-renders it, so it is not its identity.
+    const component = n.localName === "rw-island" ? null : n.getAttribute("data-rw-c");
+    return n.getAttribute("data-rw-key") ?? component ?? (n.id || null);
   }
 
   function same(a, b) {
@@ -314,6 +331,8 @@
       return;
     }
     if (from.hasAttribute("data-rw-ignore")) return;
+    if (from.localName === "rw-island") { islandMorph(from, to); return; }  // its DOM belongs to the browser
+    if (from.localName === "rw-slot" && to.__rwKeep) return;  // server-rendered children stay as they are
     syncAttributes(from, to);
     if (from instanceof HTMLTextAreaElement) {
       if (document.activeElement !== from && from.value !== to.value) from.value = to.value;
@@ -321,6 +340,12 @@
     }
     morphChildren(from, to);
     syncFormState(from, to);
+  }
+
+  function islandMorph(from, to) {
+    if (window.rational._islandMorph) { window.rational._islandMorph(from, to); return; }
+    const props = to.getAttribute("data-rw-props");  // islands.js not loaded yet: keep the newest props
+    if (props !== null) from.setAttribute("data-rw-props", props);
   }
 
   function syncAttributes(from, to) {
@@ -577,6 +602,7 @@
       if (n.nodeName === "SCRIPT") continue;
       document.body.insertBefore(document.importNode(n, true), keep);
     }
+    load(Array.from(doc.querySelectorAll("script[data-rw-load]"), (s) => s.getAttribute("src")));
     openStream();
     const hash = new URL(url).hash;
     const anchor = hash && document.getElementById(decodeURIComponent(hash.slice(1)));
@@ -590,6 +616,11 @@
   openStream();
   window.rational = {
     version: PROTOCOL,
+    // For islands.js (client components); not a public API.
+    _morphChildren: morphChildren,
+    _runOps: runOps,
+    _go: (url) => { if (isSameOrigin(url)) go(url.startsWith("/") ? (M.base || "") + url : url); },
+    get _debug() { return Boolean(M.debug); },
     /** Call a @remote method: rational.call("todo", "add", {title: "x"}) -> POST /api/todo/add.
      *  Options: {verb: "GET"} for @remote(method="GET"), whose arguments travel as the query string;
      *  {path: "/api/custom"} for a @remote with a custom path. */

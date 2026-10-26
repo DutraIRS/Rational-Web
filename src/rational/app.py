@@ -42,6 +42,7 @@ from .styling.theme import Theme, ThemeMode, get_theme
 if TYPE_CHECKING:
     from .backend.database import Database
     from .bus import Bus
+    from .client.compiler import ClientModule
     from .stores import SessionDriver
 
 log = logging.getLogger("rational")
@@ -172,8 +173,13 @@ class App:
         self.theme_href = f"/_rational/theme.css?v={_digest(self.theme_css)}"
         static = resources.files("rational").joinpath("static")
         self.runtime_js = static.joinpath("runtime.js").read_text("utf-8")
+        self.islands_js = static.joinpath("islands.js").read_text("utf-8")
         self.dev_js = static.joinpath("dev.js").read_text("utf-8")
         self.runtime_src = f"/_rational/runtime.js?v={_digest(self.runtime_js)}"
+        self.islands_src = f"/_rational/islands.js?v={_digest(self.islands_js)}"
+        self._client_modules: dict[type[Page] | type, ClientModule] = {}
+        self._client_files: dict[str, ClientModule] = {}  # "<digest>.js" -> module
+        self._compiling: set[type] = set()
 
         self.fastapi = FastAPI(
             title=title,
@@ -190,6 +196,8 @@ class App:
             self.fastapi.add_middleware(ScopedCORS, prefix=self.api_prefix, origins=self.cors_origins)
         page_routes: list[tuple[str, Callable[..., Any], str]] = [
             ("/_rational/runtime.js", self._asset(self.runtime_js, "text/javascript"), "GET"),
+            ("/_rational/islands.js", self._asset(self.islands_js, "text/javascript"), "GET"),
+            ("/_rational/c/{name}", self._client_script, "GET"),
             ("/_rational/theme.css", self._asset(self.theme_css, "text/css"), "GET"),
             (EVENT_PATH, self._event, "POST"),
             (STREAM_PATH, self._stream, "GET"),
@@ -419,6 +427,39 @@ class App:
 
     async def _ws(self, websocket: WebSocket) -> None:
         await handle_websocket(self, websocket)
+
+    # -- client components ------------------------------------------------------------------------
+
+    def client_module(self, cls: type) -> ClientModule | None:
+        """The compiled JavaScript of a client component class (compiled once, then cached).
+
+        ``None`` only while ``cls`` itself is being compiled (a component that creates itself).
+        """
+        module = self._client_modules.get(cls)
+        if module is None:
+            if cls in self._compiling:
+                return None
+            from .client.compiler import compile_component
+
+            self._compiling.add(cls)
+            try:
+                module = compile_component(cls, self.compiler, self.client_module)
+            finally:
+                self._compiling.discard(cls)
+            self._client_modules[cls] = module
+            self._client_files[module.path.rsplit("/", 1)[1]] = module
+        return module
+
+    @property
+    def client_modules(self) -> tuple[ClientModule, ...]:
+        """Every client component module compiled so far (for static export)."""
+        return tuple(self._client_modules.values())
+
+    async def _client_script(self, name: str) -> Response:
+        module = self._client_files.get(name)
+        if module is None:
+            return Response(status_code=404)
+        return Response(module.js, media_type="text/javascript", headers=_IMMUTABLE)
 
     async def _api_docs(self, request: Request) -> Response:
         session = (await self.context_for(request)).peek_session()

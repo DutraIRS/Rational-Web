@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Client components: `ClientComponent` subclasses are written in a checked subset of Python and
+  compiled to JavaScript, so their event handlers run in the browser with no request. The server
+  renders them first (real HTML before any script), then the browser hydrates them. They support
+  props (including callbacks), JSON state, `mount()`/`hydrated()`, `await self.remote(Service.method, ...)`,
+  nested client components, server components passed in as children, and the existing primitives and
+  styles, which are traced at compile time. Unsupported code is a compile error naming the file and
+  line. Python semantics (truthiness, `==` on lists, `//`, `%`, negative indexes, `str()`, format specs,
+  common `str`/`list`/`dict` methods) are kept; a browser test checks the compiled code against Python
+  value by value. Pages that only use client components need no session and can be statically exported.
+  The extra runtime (`islands.js`, about 10 KiB gzipped) loads only on pages that use them.
 - Browser tests run on any Playwright engine via `RATIONAL_BROWSER` (chromium, firefox, webkit); CI runs
   all three. Firefox and WebKit have not been run locally.
 - `tests/browser/test_a11y.py`: structural accessibility checks (lang, title, one `<main>`, labels,

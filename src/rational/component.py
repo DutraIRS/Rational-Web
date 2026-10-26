@@ -55,6 +55,7 @@ class Component:
     """
 
     _rw_props: ClassVar[dict[str, Any]] = {}
+    _rw_client: ClassVar[bool] = False  # True for ClientComponent: rendered and run in the browser
     resumable: ClassVar[bool] = True  # False: this component's state is not saved in page snapshots
 
     def __init_subclass__(cls, **kwargs: Any) -> None:

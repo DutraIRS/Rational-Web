@@ -76,6 +76,7 @@ Not sure where *you* should start?
    :caption: Guide
 
    components
+   client-components
    styling
    services
    projects

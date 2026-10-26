@@ -63,6 +63,14 @@ Styling
 .. autoclass:: rational.styling.StyleCompiler
    :members: compile
 
+Client components
+-----------------
+
+.. autoclass:: rational.ClientComponent
+   :members: remote, hydrated
+
+.. autoexception:: rational.client.ClientCompileError
+
 Services and data
 -----------------
 
