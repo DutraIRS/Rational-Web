@@ -214,7 +214,18 @@ class PageRoute:
             scripts=scripts,
             dir=page.dir,
         )
-        response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
+        cache_control = (
+            page.cache_control if page.cache_control is not None else ("no-store" if manifest else "no-cache")
+        )
+        headers = {"Cache-Control": cache_control}
+        if page.etag:
+            headers["ETag"] = page.etag
+            weak = page.etag.removeprefix("W/").strip('"')
+            sent = {tag.removeprefix("W/").strip('"') for tag in request.headers.get("if-none-match", "").split(",")}
+            if weak and weak in sent:
+                not_modified = Response(status_code=304, headers=headers)
+                return await finish(not_modified)
+        response = HTMLResponse(html, status_code=page.status or 200, headers=headers)
         security_headers(
             response,
             nonce,

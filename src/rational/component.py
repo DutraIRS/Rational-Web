@@ -215,6 +215,7 @@ class Page(Component):
     _rw_reserved = frozenset(
         {"title", "description", "lang", "dir", "favicon", "head_start", "head_end"}
         | {"image", "canonical", "noindex", "alternates", "structured_data"}
+        | {"status", "cache_control", "etag"}
     )
 
     # The HTML document around the page: set these on the class, or in ``mount()`` from the
@@ -232,6 +233,10 @@ class Page(Component):
     noindex: bool = False  # ask search engines to leave this page out (and keep it out of the sitemap)
     alternates: dict[str, str] | None = None  # translations: {"es": "/es/docs/faq.html", ...}
     structured_data: Any = None  # schema.org data, written as JSON-LD (see rational.seo.structured)
+    # The HTTP response around the page: set these on the class, or in ``mount()``.
+    status: int | None = None  # the status code to serve (default 200; 404/410 for gone content)
+    cache_control: str | None = None  # e.g. "public, max-age=3600" (default: no-store/no-cache)
+    etag: str | None = None  # serve 304 when the browser sends a matching If-None-Match
 
     @property
     def request(self) -> Any:

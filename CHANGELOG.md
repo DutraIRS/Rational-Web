@@ -24,6 +24,8 @@ All notable changes to this project are documented here. The format follows
 - Secret-key rotation: `App(secret_key=..., old_secret_keys=[...])` signs cookies and tokens with
   the newest key while the older ones still verify, so a key change logs nobody out.
   `Signer`, `Box` and `Tokens` take `extra_secrets=` for the same behaviour anywhere.
+- Per-page HTTP control: `Page.status`, `Page.cache_control` and `Page.etag` (class attributes
+  or set in `mount()`). A matching `If-None-Match` (strong or weak) is answered with `304`.
 
 ## [0.3.0a1] - 2026-10-29
 
