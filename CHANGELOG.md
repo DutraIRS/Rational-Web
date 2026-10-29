@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0a1] - 2026-10-29
+
+Completes the production batteries: Apple sign-in, Stripe, error hooks, secret-key rotation,
+per-page HTTP control, cacheable pages with client components, URL query state, safe snapshot
+restore after deploys and Postgres sessions. The Redis and SQL code now runs against real servers
+in CI.
+
 ### Added
 - Sign in with Apple (`rational.oauth.apple(client_id=..., team_id=..., key_id=..., private_key=...)`):
   the client secret is an ES256 JWT signed for every token request, the callback arrives as a

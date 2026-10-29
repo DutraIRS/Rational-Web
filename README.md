@@ -220,13 +220,11 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Internationalization
 - [x] Optional Bootstrap and Tailwind adapters
 
-**0.4: client side and batteries**
+**0.4: client side and production batteries**
 - [x] Client components: Python compiled to JavaScript, rendered by the server first, hydrated in the browser
 - [x] `@computed`, `@watch`, two-way `bind=`, `provide`/`inject`, view transitions
 - [x] Passwords, JSON Web Tokens, signing and encryption (`rational.security`), app cookies
 - [x] `Repository` for typed CRUD and pagination; `Socket` classes with rooms across workers
-
-**0.5: production batteries**
 - [x] Static sites that keep existing URLs and markup: `.html` routes, `paths=` for parameter
       routes, relative export, per-page `lang`/`dir`/head markup, `theme=None`
 - [x] Email: `Mailer` (SMTP, HTTP providers), emails written as components, captured in tests
@@ -246,7 +244,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Snapshot restore that checks saved state against the deployed components, else reloads cleanly
 - [x] Postgres session driver (any SQL database through SQLAlchemy)
 
-**0.6: more batteries**
+**0.5: more batteries**
 - [ ] File uploads and storage (local, S3), with size and type checks
 - [ ] Admin panel generated from SQLAlchemy models
 - [ ] Two-factor sign-in (TOTP), then passkeys
