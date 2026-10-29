@@ -81,10 +81,13 @@ there**:
 | Forms | Pydantic validation from handler annotations; `FieldError` for business rules; messages shown under the right field |
 | Local interactions | `js.confirm`, `js.toggle_class`, `js.set_attr`, `js.focus`, `js.set_theme`... run with no round trip |
 | Styling | `Style` merging with `\|`, four theme presets, light/dark/system, responsive breakpoints and container queries |
-| Backend | `Service` + `@remote` → typed JSON API under `/api`, interactive **Swagger UI** at `/api/docs`; async SQLAlchemy |
+| Client side | `ClientComponent`: Python compiled to JavaScript, rendered by the server first; `@computed`, `@watch`, two-way `bind=`, `provide`/`inject` |
+| Backend | `Service` + `@remote` → typed JSON API under `/api`, interactive **Swagger UI** at `/api/docs`; async SQLAlchemy, `Repository`, `Socket` rooms |
+| Accounts | Sessions safe across workers, scrypt passwords, JWT, signed and encrypted cookies, password reset, email verification, sign-in links, sign-in with Google, GitHub, Microsoft or any OpenID Connect provider |
+| Production | Background jobs and schedules, email written as components, SEO (sitemap, link previews, `hreflang`, JSON-LD), rate limits, form bot checks, CAPTCHA |
 | Projects | `Router` (pages and services in their own modules, with prefixes) and a composition root in `app.py` |
 | Developer experience | `--dev` hot reload on every OS, live browser reload, error pages that point at *your* line with hints |
-| Deployment | `--prod`, `python -m rational`, any ASGI server, mountable under a sub-path, proxy-aware, static export with `--export` |
+| Deployment | `--prod`, `python -m rational`, any ASGI server, mountable under a sub-path, proxy-aware, static export with `--export` (keeps existing URLs, relative links) |
 | Testing | `rational.testing.TestClient` drives pages by accessible name: `page.click("Save")` |
 
 ## Examples
@@ -223,16 +226,45 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Passwords, JSON Web Tokens, signing and encryption (`rational.security`), app cookies
 - [x] `Repository` for typed CRUD and pagination; `Socket` classes with rooms across workers
 
+**0.5: production batteries**
+- [x] Static sites that keep existing URLs and markup: `.html` routes, `paths=` for parameter
+      routes, relative export, per-page `lang`/`dir`/head markup, `theme=None`
+- [x] Email: `Mailer` (SMTP, HTTP providers), emails written as components, captured in tests
+- [x] Background jobs and scheduled tasks with retries
+- [x] Password recovery, email verification and magic-link sign-in
+- [x] SEO: `sitemap.xml`, `robots.txt`, canonical URLs, Open Graph, JSON-LD, `hreflang`
+- [x] Bot protection: honeypot, form timing, rate limits for pages and `@remote` methods
+- [x] CAPTCHA field: Cloudflare Turnstile, hCaptcha, reCAPTCHA
+- [x] Sign-in with Google, GitHub, Microsoft and any OpenID Connect provider
+- [ ] Sign in with Apple (form-post callback, signed client secret)
+- [ ] Stripe: Checkout, customer portal and signed webhooks, without the SDK
+- [ ] Error hook (`app.on_error`) for Sentry and similar, covering pages, events, `@remote` and jobs
+- [ ] Secret-key rotation: sign with the newest key, accept the older ones
+- [ ] Per-page HTTP control: status codes, `Cache-Control`, `ETag`
+- [ ] CSRF tokens for client components on cached, session-less pages
+- [ ] Page state kept in the URL query (search pages), restored with snapshots
+- [ ] Snapshot restore that checks saved state against the deployed components, else reloads cleanly
+- [ ] Postgres session driver
+
+**0.6: more batteries**
+- [ ] File uploads and storage (local, S3), with size and type checks
+- [ ] Admin panel generated from SQLAlchemy models
+- [ ] Two-factor sign-in (TOTP), then passkeys
+- [ ] Roles and permissions
+- [ ] Caching (`@cached`, memory or Redis)
+- [ ] Health checks and Prometheus metrics
+- [ ] Content collections: Markdown with front matter as pages
+- [ ] Notifications: in-app, email and web push
+- [ ] Progressive web apps (manifest, offline service worker), then desktop builds and mobile shells
+
 **1.0: stability**
 - [ ] Frozen public API with a deprecation policy
 - [ ] Accessibility audit (a structural a11y suite runs in CI)
 - [x] Browser matrix in CI (Chromium, Firefox, WebKit)
-- [ ] Load tests
-- [ ] Independent security review
+- [ ] Load tests on a real app (AcademicRadar)
+- [ ] Independent security review of a real app
 
-Have an idea? Open an issue. The roadmap is a conversation. Longer-term design notes on
-concurrency, cross-tab state, client rendering and serverless deployment live in
-[`ideas/concurrency-and-state.md`](ideas/concurrency-and-state.md).
+Have an idea? Open an issue. The roadmap is a conversation.
 
 ## Contributing
 

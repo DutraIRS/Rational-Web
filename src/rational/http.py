@@ -80,6 +80,7 @@ def security_headers(
     inline_styles: bool = False,
     style_origins: Sequence[str] = (),
     script_origins: Sequence[str] = (),
+    frame_origins: Sequence[str] = (),
 ) -> None:
     for name, value in _SECURITY_HEADERS.values():
         response.headers[name.decode("ascii")] = value.decode("ascii")
@@ -87,9 +88,10 @@ def security_headers(
         style_src = "'self' 'unsafe-inline'" if inline_styles else f"'self' 'nonce-{nonce}'"
         style_src = " ".join([style_src, *style_origins])
         script_src = " ".join(["'self'", *script_origins])
+        frame_src = f"frame-src 'self' {' '.join(frame_origins)}; " if frame_origins else ""
         response.headers["Content-Security-Policy"] = (
             f"default-src 'self'; script-src {script_src}; style-src {style_src}; img-src 'self' data: https:; "
-            "object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'"
+            f"{frame_src}object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'"
         )
 
 

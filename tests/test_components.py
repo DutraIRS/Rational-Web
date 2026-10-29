@@ -90,8 +90,8 @@ def test_multi_root_components_get_a_wrapper():
             return Pair()
 
     page = TestClient(make_app(Home)).open("/")
-    wrapper = page.dom.find_all(data_rw_c="c1")[0]
-    assert [c.tag for c in wrapper.children] == ["p", "p"]
+    wrappers = [div for div in page.dom.find_all("div") if [c.tag for c in div.children] == ["p", "p"]]
+    assert len(wrappers) == 1
 
 
 def test_identity_is_preserved_across_parent_rerenders_with_keys():

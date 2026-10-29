@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._tracking import Cell, Frame, current_frame
 from .binding import bind_payload, check_signature
+from .bots import check_submit
 from .component import Component, Page
 from .concurrency import invoke
 from .diff import diff
@@ -556,6 +557,12 @@ class PageRuntime:
         if entry is None:
             raise StaleHandlerError()
         _component, handler, event = entry
+        app = self.context.app
+        if app is not None:
+            await app.limiter.check(handler, self.context)
+            if event == "submit" and isinstance(payload.get("form"), dict):
+                payload = {**payload, "form": dict(payload["form"])}
+                await check_submit(handler, self.context, payload["form"])
         args = bind_payload(handler, event, payload)
         await invoke(handler, tuple(args), timeout=timeout, threads=threads)
 

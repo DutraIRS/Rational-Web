@@ -109,6 +109,27 @@ Security, cookies and sockets
 .. autoclass:: rational.backend.database.Repository
    :members:
 
+Jobs and email
+--------------
+
+.. automodule:: rational.jobs
+   :members: Jobs, Job, JobStore, MemoryJobStore, RedisJobStore
+
+.. automodule:: rational.mail
+   :members: Mailer, Email, SMTP, Resend, Postmark, Console, Memory, html_to_text, render_email
+
+.. automodule:: rational.accounts
+   :members: Accounts
+
+.. automodule:: rational.seo
+   :members: Seo, structured
+
+.. automodule:: rational.oauth
+   :members: OAuth, OAuthUser, Provider, google, github, microsoft, oidc
+
+.. automodule:: rational.bots
+   :members: limit, Limiter, human, HumanCheck, Captcha, TooManyRequests, NotHuman
+
 Errors and redirects
 --------------------
 

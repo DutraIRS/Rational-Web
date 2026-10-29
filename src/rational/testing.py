@@ -137,8 +137,8 @@ class PageView:
 
     # -- interacting ---------------------------------------------------------------------------
 
-    def click(self, text: str) -> dict[str, Any]:
-        return self.fire(self.find(text, "click").attrs["data-rw-on-click"], {})
+    def click(self, text: str, *, check: bool = True) -> dict[str, Any]:
+        return self.fire(self.find(text, "click").attrs["data-rw-on-click"], {}, check=check)
 
     def input(self, label: str, value: Any, event: str = "input") -> dict[str, Any]:
         el = self.field(label)
@@ -153,7 +153,13 @@ class PageView:
             forms = [f for f in forms if button in f.text]
         if not forms:
             raise LookupError("no form with an on_submit handler")
-        return self.fire(forms[0].attrs["data-rw-on-submit"], {"form": data}, check=check)
+        # Like a browser, send the form's hidden fields too (``data`` wins).
+        hidden = {
+            i.attrs["name"]: i.attrs.get("value", "")
+            for i in forms[0].find_all("input", type="hidden")
+            if "name" in i.attrs
+        }
+        return self.fire(forms[0].attrs["data-rw-on-submit"], {"form": {**hidden, **data}}, check=check)
 
     def fire(self, handler: str, payload: dict[str, Any], *, check: bool = True) -> dict[str, Any]:
         if self.manifest is None:

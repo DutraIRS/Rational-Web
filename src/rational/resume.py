@@ -141,8 +141,7 @@ class PageResumer:
             return None
         ctx = await app.context_for(request, session)
         try:
-            props = route.props_from(snap["params"])
-            page = route.page(**props)
+            page = route.build(snap["params"])
             runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
             runtime.id = page_id
             runtime.origin = (route.path, snap["params"])

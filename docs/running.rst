@@ -176,11 +176,34 @@ and host them anywhere (GitHub Pages, Netlify, S3, a CDN)::
    $ python app.py --export site/ --root-path /my-repo     # served under a sub-path
 
 This writes ``site/index.html``, ``site/<path>/index.html``, ``site/_rational/theme.css``,
-a ``404.html`` and a copy of every directory mounted with ``app.static``. Only pages that
-work without a server are exported: those with no path parameters, no ``auth="required"``
-and no interactivity (any page that loads the browser runtime, such as one with event handlers).
-Everything else is listed as skipped with the reason, and the command exits non-zero if nothing could
-be exported. The same export is available from code as :func:`rational.export.export_site`.
+a ``404.html`` and a copy of every directory mounted with ``app.static``. A route that ends in
+``.html`` keeps that file name, so ``/docs/faq.html`` is written as ``site/docs/faq.html`` and an
+existing site keeps its URLs. Only pages that work without a server are exported: those with no
+``auth="required"`` and no interactivity (any page that loads the browser runtime, such as one
+with event handlers). Everything else is listed as skipped with the reason, and the command exits
+non-zero if nothing could be exported. The same export is available from code as
+:func:`rational.export.export_site`.
+
+A route with path parameters is exported once per value listed in ``paths`` (a list, or a function
+returning one), so one class can produce a whole documentation site::
+
+   @app.page("/docs/{slug}.html", paths=[{"slug": slug} for slug in DOCS])
+   class Doc(Page):
+       slug: str
+
+Options for sites that already exist and must keep looking exactly the same:
+
+* ``--relative`` (``relative=True``) links each page's assets relative to that page
+  (``../_rational/...``), so the site also works opened from disk or under any prefix.
+* ``--no-404`` (``not_found=False``) writes no ``404.html``. A page registered at ``/404.html``
+  replaces Rational's own.
+* ``App(theme=None)`` leaves out the theme stylesheet and its reset. ``Style`` values still
+  compile, but their ``var(--rw-...)`` colors and spacing are undefined unless your CSS defines them.
+* Pages without the browser runtime get no ``<style>`` element unless they use ``Style``, and no
+  ``data-rw-*`` attributes, so a strict ``style-src 'self'`` policy holds.
+* To reproduce existing HTML exactly, build it with :func:`rational.h` rather than ``Text`` or
+  ``Row``, which bring their own styles. ``h()`` writes no whitespace between children: where
+  the layout depends on the space between inline elements (``<img> <span>``), add ``" "``.
 
 Request logging and tracing
 ---------------------------

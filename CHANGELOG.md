@@ -6,7 +6,47 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0a1] - 2026-10-29
+
+Production batteries: background jobs, email, account emails, SEO, bot protection and sign-in
+with other providers, plus static export for existing sites.
+
+### Added
+- Static sites that already exist can be rebuilt exactly: routes ending in `.html` export under
+  that name; `@app.page(path, paths=[...])` exports one page per path-parameter value;
+  `export_site(relative=True)` / `--relative` links assets relative to each page;
+  `not_found=False` / `--no-404` skips the 404 page (a page at `/404.html` replaces it);
+  `App(theme=None)` drops the theme stylesheet; `App(favicon=False)` writes no icon link.
+- `Page.lang`, `Page.dir`, `Page.favicon`, `Page.head_start` and `Page.head_end`, settable on the
+  class or in `mount()`.
+- Background jobs (`rational.jobs`): `@jobs.job(retries=...)`, `enqueue`, `enqueue_in`,
+  `@jobs.every(...)` schedules that run once per interval across workers; in memory or in Redis
+  (`RedisJobStore`), at-least-once with leases.
+- Email (`rational.mail`): `Mailer` sends components as HTML email with inline styles and a
+  plain-text version, through `SMTP`, `Resend` or `Postmark` (`Console` and `Memory` for
+  development and tests), now or in the background through jobs.
+- Account emails (`rational.accounts`): subclass `Accounts` with four lookups to get password
+  reset (single-use links), email verification and one-time sign-in links, with no account
+  discovery and at most one message per address a minute. `Mailer` also sends element trees.
+- SEO (`rational.seo`): `Seo(app, site_url=...)` adds canonical URLs, Open Graph and Twitter
+  tags, `hreflang` alternates, JSON-LD (`structured(...)`) and `noindex` to pages, and serves
+  `/sitemap.xml` (with `paths=` routes) and `/robots.txt`; a static export writes both. Pages gain
+  `image`, `canonical`, `noindex`, `alternates` and `structured_data`; a `{lang}` path parameter
+  sets the page's language.
+- Bot protection (`rational.bots`): `@limit("5/minute", per=...)` for pages, event handlers and
+  `@remote` methods (HTTP 429, memory or Redis counters); `HumanCheck()` + `@human` for forms
+  (honeypot, signed timing); `Captcha(app, "turnstile" | "hcaptcha" | "recaptcha", ...)` with
+  server-side verification and CSP `frame-src`. `TestClient.submit` sends hidden fields like a
+  browser; `PageView.click` takes `check=`.
+- Sign-in with other providers (`rational.oauth`): `OAuth(app, base_url=..., on_login=...)` with
+  `google`, `github`, `microsoft` and any OpenID Connect `oidc(...)` provider; one-time state,
+  nonce and PKCE, ending in `session.login`.
+
 ### Changed
+- `MemorySessionDriver` drops expired keys as it goes, not only when they are read again.
+- `Page.title` and `Page.description` can be set in `mount()` (they are no longer class variables).
+- Pages without the browser runtime have no `<style>` element unless they use styles, and no
+  `data-rw-c` attributes; with `theme=None`, `<html>` has no `data-theme`.
 - Releases no longer install a browser: the browser tests run in CI on the same commit, and the
   Playwright install depends on an Ubuntu package mirror that can stall for many minutes.
 
