@@ -32,6 +32,7 @@ import hashlib
 import hmac
 import inspect
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -41,12 +42,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from . import _http
 from .http import base_path
-from .security import Signer
+from .security import InvalidToken, Signer
 
 if TYPE_CHECKING:
     from .app import App
 
 _API = "https://api.stripe.com"
+log = logging.getLogger("rational.stripe")
 
 
 class StripeError(Exception):
@@ -69,7 +71,7 @@ class Stripe:
         app: App,
         *,
         secret_key: str,
-        webhook_secret: str = "",
+        webhook_secret: str = "",  # needed to accept webhooks: without it every webhook call is refused
         path: str = "/stripe",
         tolerance: float = 300.0,
         api_url: str = _API,
@@ -81,9 +83,12 @@ class Stripe:
         self.api_url = api_url.rstrip("/")
         self.path = "/" + path.strip("/")
         self.handlers: list[Handler] = []
-        self._signer = Signer(app.secret_key, salt="rational.stripe.checkout")
         app.fastapi.add_api_route(f"{self.path}/checkout", self._checkout, methods=["GET"], include_in_schema=False)
         app.fastapi.add_api_route(f"{self.path}/webhook", self._webhook, methods=["POST"], include_in_schema=False)
+
+    @property
+    def _signer(self) -> Signer:
+        return self.app.signer("rational.stripe.checkout")
 
     def handler(self, fn: Handler) -> Handler:
         """Register ``fn(event)`` to run for every verified webhook event."""
@@ -114,21 +119,28 @@ class Stripe:
         return dict(await self._call("GET", f"/v1/customers/{customer_id}"))
 
     async def _checkout(self, request: Request) -> Response:
+        from .pages import error_page
+
         try:
             params = dict(self._signer.unsign(str(request.query_params.get("c", "")), max_age=24 * 60 * 60))
-        except Exception:
-            from .pages import error_page
-
+        except (InvalidToken, TypeError, ValueError):
             return error_page(self.app, request, 404, "This checkout link is not valid")
         origin = str(request.base_url).rstrip("/") + base_path(request)
         for key in ("success_url", "cancel_url"):
             if key in params and str(params[key]).startswith("/"):
                 params[key] = origin + str(params[key])
-        session = await self.checkout(**params)
+        try:
+            session = await self.checkout(**params)
+        except StripeError:
+            log.exception("could not create a Stripe Checkout Session")
+            return error_page(self.app, request, 502, "Checkout is not available right now; please try again")
         return RedirectResponse(str(session["url"]), status_code=303)
 
     async def _webhook(self, request: Request) -> Response:
         payload = await request.body()
+        if not self.webhook_secret:  # without a secret anyone could sign events: accept none
+            log.error("a Stripe webhook arrived, but Stripe(webhook_secret=...) is not set")
+            return JSONResponse({"error": "webhooks are not configured"}, status_code=503)
         try:
             event = self.verify(payload, request.headers.get("Stripe-Signature", ""))
         except ValueError:
@@ -145,20 +157,24 @@ class Stripe:
         Raises ``ValueError`` when the header is malformed, the timestamp is older than
         ``tolerance`` seconds, or the HMAC does not match — the request is then rejected.
         """
-        parts: dict[str, str] = {}
+        if not self.webhook_secret:
+            raise ValueError("no webhook secret is set")
+        timestamp, signatures = "", []
         for entry in header.split(","):
             key, _, value = entry.partition("=")
-            parts[key.strip()] = value
-        timestamp, signature = parts.get("t", ""), parts.get("v1", "")
+            if key.strip() == "t":
+                timestamp = value
+            elif key.strip() == "v1":  # several while the endpoint's secret is being rolled
+                signatures.append(value)
         try:
             age = abs(time.time() - float(timestamp))
         except ValueError:
             raise ValueError("malformed Stripe signature header") from None
-        if not signature or age > self.tolerance:
+        if not signatures or age > self.tolerance:
             raise ValueError("the Stripe signature is stale or missing")
         signed = f"{timestamp}.".encode() + payload
         expected = hmac.new(self.webhook_secret.encode(), signed, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, signature):
+        if not any(hmac.compare_digest(expected, signature) for signature in signatures):
             raise ValueError("the Stripe signature does not match this payload")
         event: dict[str, Any] = json.loads(payload)
         return event
@@ -168,7 +184,7 @@ class Stripe:
             return await _http.request(
                 method,
                 f"{self.api_url}{endpoint}",
-                form={k: v for k, v in (form or {}).items() if v is not None},
+                form={k: v for k, v in form.items() if v is not None} if form is not None else None,
                 auth=(self.secret_key, ""),
             )
         except _http.HTTPError as e:

@@ -68,3 +68,20 @@ def test_app_cookies_survive_a_key_rotation():
     only_new = TestClient(app_with([NEW]))
     only_new.http.cookies.set("prefs", cookie)
     assert "none" in only_new.http.get("/").text  # once the old key is dropped, old cookies are gone
+
+
+def test_every_signed_value_survives_a_rotation(monkeypatch):
+    from rational.bots import _signer as form_signer
+
+    old_key, new_key = "o" * 40, "n" * 40
+    before = App(secret_key=old_key)
+    reset_link = before.signer("rational.accounts.reset").sign(["1", "fp"])
+    form_stamp = form_signer(before).sign(1.0)
+    checkout = before.signer("rational.stripe.checkout").sign({"mode": "payment"})
+
+    monkeypatch.setenv("RATIONAL_OLD_SECRET_KEYS", old_key)
+    after = App(secret_key=new_key)  # old keys from the environment, as a deploy would set them
+    assert after.signer("rational.accounts.reset").unsign(reset_link) == ["1", "fp"]
+    assert form_signer(after).unsign(form_stamp) == 1.0
+    assert after.signer("rational.stripe.checkout").unsign(checkout) == {"mode": "payment"}
+    assert after.signer("rational.cookie").sign("x") != before.signer("rational.cookie").sign("x")  # new key signs

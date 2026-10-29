@@ -39,7 +39,13 @@ The HTML document around a page is set by attributes that are *not* props: ``tit
 ``head_end`` (trusted markup closing ``<head>``, after Rational's and the app's stylesheets, so a
 page's own CSS wins). ``image``, ``canonical``, ``noindex``, ``alternates`` and
 ``structured_data`` feed search engines and link previews (see :doc:`batteries`). A ``{lang}``
-path parameter sets ``lang``. Set them on the class, or in ``mount()`` when they come from the page's
+path parameter sets ``lang``.
+
+The HTTP response is set the same way: ``status`` (``404`` or ``410`` for missing or removed
+content, the page still rendering), ``cache_control`` (``"public, max-age=3600"``; the default is
+``no-cache``) and ``etag`` (the browser gets ``304 Not Modified`` when its copy matches). A page
+that loads the browser runtime is always ``no-store``, because it carries a page id and CSRF token
+for one visitor, and a response that sets a cookie is never cached for others. Set them on the class, or in ``mount()`` when they come from the page's
 data, so one class can serve many pages:
 
 .. code-block:: python

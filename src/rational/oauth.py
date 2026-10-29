@@ -24,10 +24,12 @@ HTTPS rather than from a token the browser could have touched.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import inspect
 import json
 import secrets
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -38,12 +40,14 @@ from fastapi.responses import RedirectResponse
 
 from . import _http
 from .http import base_path, local_path
+from .security import InvalidToken
 
 if TYPE_CHECKING:
     from .app import App
     from .context import Context
 
-_SESSION_KEY = "rw.oauth"
+_FLOW_COOKIE = "rw_oauth"
+_FLOW_TTL = 10 * 60.0  # seconds to complete a sign-in at the provider
 
 
 @dataclass(frozen=True)
@@ -186,11 +190,10 @@ class Apple(Provider):
         self.secret_lifetime = 15777000  # 183 days; Apple rejects secrets valid beyond six months
 
     def secret(self) -> str:
-        import time
-
         try:
             from cryptography.hazmat.primitives import hashes, serialization
             from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
         except ImportError as e:
             msg = 'Sign in with Apple needs the cryptography package: pip install "rational[crypto]"'
             raise ImportError(msg) from e
@@ -212,13 +215,21 @@ class Apple(Provider):
         )
         key = serialization.load_pem_private_key(self.private_key.encode(), password=None)
         assert isinstance(key, ec.EllipticCurvePrivateKey)  # Apple keys are EC P-256
-        signature = key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256()))
-        return signing_input + "." + _b64url(signature)
+        der = key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256()))
+        r, s = decode_dss_signature(der)  # a JWT carries the raw r || s, not DER (RFC 7518, 3.4)
+        return signing_input + "." + _b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
 
-    async def user(
-        self, access_token: str, *, tokens: dict[str, Any] | None = None, form_user: str | None = None
-    ) -> OAuthUser:
-        claims = _id_token_claims((tokens or {}).get("id_token", ""))
+    def from_id_token(self, id_token: str, *, nonce: str, form_user: str | None = None) -> OAuthUser:
+        """Who signed in, from the ID token the token endpoint returned.
+
+        The token came straight from Apple over HTTPS, so its signature need not be checked
+        (OpenID Connect Core 3.1.3.7); its issuer, audience, expiry and nonce still are.
+        """
+        claims = _id_token_claims(id_token)
+        if claims.get("iss") != "https://appleid.apple.com" or claims.get("aud") != self.client_id:
+            raise ValueError("the ID token is not for this app")
+        if claims.get("nonce") != nonce or float(claims.get("exp", 0)) < time.time():
+            raise ValueError("the ID token is stale or for another sign-in")
         name = None
         if form_user:  # first sign-in only: the person's name arrives as a form field
             try:
@@ -230,7 +241,7 @@ class Apple(Provider):
             provider=self.name,
             id=str(claims["sub"]),
             email=claims.get("email"),
-            email_verified=claims.get("email_verified") is True,
+            email_verified=claims.get("email_verified") in (True, "true"),  # Apple sends either
             name=name,
             picture=None,
             raw=claims,
@@ -318,22 +329,37 @@ class OAuth:
         if chosen.pkce:
             params["code_challenge"] = challenge
             params["code_challenge_method"] = "S256"
-        ctx = await self.app.context_for(request)
-        async with self.app.session_lock(ctx):
-            ctx.session[_SESSION_KEY] = flow
         response = RedirectResponse(f"{chosen.authorize_url}?{urlencode(params)}", status_code=303)
-        await self.app.finish(request, response, ctx)
+        # The flow lives in a short-lived signed cookie, not the session: Apple answers with a
+        # cross-site form POST, which carries only SameSite=None cookies. Tying the state to this
+        # browser's cookie is what stops another site from completing a sign-in for it.
+        cross_site = chosen.response_mode == "form_post"
+        response.set_cookie(
+            _FLOW_COOKIE,
+            self.app.signer("rational.oauth.flow").sign(flow),
+            max_age=int(_FLOW_TTL),
+            path=self.path,
+            httponly=True,
+            secure=cross_site or self._secure(request),
+            samesite="none" if cross_site else "lax",
+        )
         return response
 
     async def _callback(self, request: Request, provider: str) -> Response:
+        flow: Any = None
+        with contextlib.suppress(InvalidToken):
+            flow = self.app.signer("rational.oauth.flow").unsign(
+                request.cookies.get(_FLOW_COOKIE, ""), max_age=_FLOW_TTL
+            )
         ctx = await self.app.context_for(request)
-        if ctx.peek_session() is None:
-            response = self._fail(request, 400, "This sign-in link is not valid; please start again")
-        else:
-            async with self.app.session_lock(ctx):  # the state is used up even if signing in fails
-                response = await self._complete(request, provider, ctx, ctx.session.pop(_SESSION_KEY, None))
+        async with self.app.session_lock(ctx):
+            response = await self._complete(request, provider, ctx, flow)
+        response.delete_cookie(_FLOW_COOKIE, path=self.path)  # one use, even when signing in fails
         await self.app.finish(request, response, ctx)
         return response
+
+    def _secure(self, request: Request) -> bool:
+        return self.app.secure_cookies if self.app.secure_cookies is not None else request.url.scheme == "https"
 
     async def _complete(self, request: Request, provider: str, ctx: Context, flow: Any) -> Response:
         chosen = self.providers.get(provider)
@@ -364,10 +390,10 @@ class OAuth:
                 },
             )
             if isinstance(chosen, Apple):
-                person = await chosen.user(tokens["access_token"], tokens=tokens, form_user=form_user)
+                person = chosen.from_id_token(tokens["id_token"], nonce=flow["nonce"], form_user=form_user)
             else:
                 person = await chosen.user(tokens["access_token"])
-        except (_http.HTTPError, KeyError, TypeError):
+        except (_http.HTTPError, KeyError, TypeError, ValueError):
             return self._fail(request, 502, f"Could not sign in with {provider}; please try again")
         principal = self.on_login(ctx, person)
         if inspect.isawaitable(principal):

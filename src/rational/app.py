@@ -37,6 +37,7 @@ from .protocol import EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_str
 from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
+from .security import Signer
 from .session import Session, SessionBackend, SessionStore, TTLStore
 from .sockets import Rooms
 from .styling.compiler import StyleCompiler
@@ -127,7 +128,8 @@ class App:
         self.websocket = websocket and not api_only
         self.i18n = i18n
         self._secret_key = secret_key or os.environ.get("RATIONAL_SECRET_KEY")
-        self._old_secret_keys = tuple(old_secret_keys)
+        env_old = os.environ.get("RATIONAL_OLD_SECRET_KEYS", "")  # comma-separated, newest first
+        self._old_secret_keys = tuple(old_secret_keys) or tuple(k for k in env_old.split(",") if k.strip())
         if adapter is not None and adapter.needs_inline_styles and csp:
             raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
         self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
@@ -443,6 +445,11 @@ class App:
                 )
             self._secret_key = secrets.token_urlsafe(32)
         return self._secret_key
+
+    def signer(self, salt: str) -> Signer:
+        """A :class:`~rational.security.Signer` for ``salt`` that signs with the current secret key and
+        still accepts values signed with ``old_secret_keys`` (key rotation)."""
+        return Signer(self.secret_key, salt=salt, extra_secrets=self._old_secret_keys)
 
     async def finish(self, request: Request, response: Response, ctx: Context) -> None:
         """Persist session changes (creation, id rotation) and cookies set during the request."""

@@ -9,23 +9,31 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - Sign in with Apple (`rational.oauth.apple(client_id=..., team_id=..., key_id=..., private_key=...)`):
   the client secret is an ES256 JWT signed for every token request, the callback arrives as a
-  signed form POST and the identity (and the first sign-in name) is read from the ID token.
-  Needs the `rational[crypto]` extra. `Provider` gained `secret()` (per-request client secrets),
+  cross-site form POST and the identity (and the first sign-in name) is read from the ID token,
+  whose issuer, audience, expiry and nonce are checked. Needs HTTPS and the `rational[crypto]`
+  extra. Every provider's sign-in state now lives in a short-lived signed cookie instead of the
+  session (`SameSite=None; Secure` for Apple's cross-site POST). `Provider` gained `secret()` (per-request client secrets),
   `pkce=False` and `response_mode` for providers that deviate from the redirect + PKCE flow.
 - Stripe (`rational.stripe`): `Stripe(app, secret_key=...)` with no SDK — `checkout_url(...)`
   signs the parameters into a link that creates the Checkout Session on click (no API call while
   rendering), `checkout(...)`/`portal(...)`/`customer(...)` call the REST API directly, and
   `@stripe.handler` receives only webhook events whose `Stripe-Signature` header verifies against
-  the exact raw body (stale or mismatched signatures are rejected before any handler runs).
+  the exact raw body (stale or mismatched signatures are rejected before any handler runs; any
+  of several `v1` signatures is accepted while the endpoint secret is rolled). Without
+  `webhook_secret`, every webhook call is refused.
 - `app.on_error` hooks (`rational.errors.ErrorInfo`): one registration receives the unhandled
   exceptions of pages, event handlers, `@remote` methods and jobs, with the kind, request and
   per-kind detail (handler, service/method, job and attempt). Exceptions raised by a hook are
   logged and discarded, so reporting can never break error handling.
 - Secret-key rotation: `App(secret_key=..., old_secret_keys=[...])` signs cookies and tokens with
-  the newest key while the older ones still verify, so a key change logs nobody out.
-  `Signer`, `Box` and `Tokens` take `extra_secrets=` for the same behaviour anywhere.
+  the newest key while the older ones still verify, so a key change logs nobody out and breaks no
+  link: cookies, reset and sign-in links, form checks and checkout links all use `app.signer(salt)`.
+  `RATIONAL_OLD_SECRET_KEYS` sets the old keys from the environment. `Signer`, `Box` and `Tokens` take
+  `extra_secrets=` for the same behaviour anywhere.
 - Per-page HTTP control: `Page.status`, `Page.cache_control` and `Page.etag` (class attributes
   or set in `mount()`). A matching `If-None-Match` (strong or weak) is answered with `304`.
+  Pages that load the browser runtime stay `no-store` (they carry a visitor's page id and CSRF
+  token), and a response that sets a cookie is never publicly cached.
 
 ## [0.3.0a1] - 2026-10-29
 

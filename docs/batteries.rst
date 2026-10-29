@@ -70,7 +70,10 @@ endpoint — the identity comes from the ID token::
     ))                                        # needs: pip install "rational[crypto]"
 
 Apple sends the person's name only on the first sign-in, as a form field; ``OAuthUser.name``
-carries it then. Afterwards only the stable ``sub`` and (relay) email remain.
+carries it then. Afterwards only the stable ``sub`` and (relay) email remain. The ID token's
+issuer, audience, expiry and nonce are checked. Apple only works over HTTPS: its cross-site POST
+carries just the ``SameSite=None; Secure`` cookie that holds the sign-in state (every provider's
+state lives in that short-lived signed cookie, so no session is needed until sign-in succeeds).
 
 Taking payments with Stripe
 ---------------------------
@@ -97,8 +100,9 @@ the REST API directly (``pip install`` nothing extra)::
 ``stripe.checkout_url`` signs the parameters, so nothing is sent to Stripe while the page
 renders and the link cannot be altered. ``stripe.portal(customer_id, return_url=...)`` opens the
 customer portal. Webhook handlers run only after the ``Stripe-Signature`` header is checked
-against the raw request body, with a five-minute replay window. Point Stripe at
-``https://shop.example/stripe/webhook``.
+against the raw request body, with a five-minute replay window; without ``webhook_secret`` every
+webhook call is refused. Point Stripe at ``https://shop.example/stripe/webhook``. Stripe may send
+an event more than once: make handlers idempotent (record ``event["id"]``).
 
 Password recovery, email verification and sign-in links
 --------------------------------------------------------
@@ -169,7 +173,12 @@ Secrets
 -------
 
 Signed and encrypted values need a long random secret: ``App(secret_key=...)`` or the
-``RATIONAL_SECRET_KEY`` environment variable. Make one with
+``RATIONAL_SECRET_KEY`` environment variable. To replace a key without signing everyone out or
+breaking links already sent, make the new one current and keep the old one for a while:
+``App(secret_key=NEW, old_secret_keys=[OLD])`` or ``RATIONAL_OLD_SECRET_KEYS`` (comma-separated).
+New values are signed with the current key; values signed with an old one still verify, in
+cookies, reset and sign-in links, form checks and checkout links alike (``app.signer(salt)``
+gives your own code the same behavior). Make one with
 ``python -c "import secrets; print(secrets.token_urlsafe(32))"``. In ``--dev`` a temporary one is
 made up if none is set; in production the app refuses to sign without one.
 
@@ -315,6 +324,25 @@ serves ``/sitemap.xml`` and ``/robots.txt``::
   sign-in, and parameter routes through their ``paths=``. A static export writes both files.
 * A ``{lang}`` path parameter sets the page's language (``<html lang>``), so translated sites need
   no extra prop.
+
+Error reporting
+---------------
+
+``app.on_error`` hooks receive every unhandled exception, from pages, event handlers, ``@remote``
+methods and jobs, with where it happened. That is where Sentry and similar services plug in::
+
+    import sentry_sdk
+
+    @app.on_error
+    def report(info):                         # an ErrorInfo
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("kind", info.kind)  # "page", "event", "remote" or "job"
+            scope.set_context("rational", info.extra)
+            sentry_sdk.capture_exception(info.exc)
+
+Hooks may be ``async``. A hook that raises is logged and skipped: error reporting never breaks
+error handling. Failed jobs are reported on every attempt, with ``info.extra["final"]`` set on the
+last one.
 
 Background jobs
 ---------------

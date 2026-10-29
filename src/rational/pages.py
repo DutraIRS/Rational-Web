@@ -214,13 +214,14 @@ class PageRoute:
             scripts=scripts,
             dir=page.dir,
         )
-        cache_control = (
-            page.cache_control if page.cache_control is not None else ("no-store" if manifest else "no-cache")
-        )
+        cache_control = page.cache_control if page.cache_control is not None else "no-cache"
+        if manifest:  # the page id and CSRF token belong to this visitor: never in a shared cache
+            cache_control = "no-store"
         headers = {"Cache-Control": cache_control}
         if page.etag:
-            headers["ETag"] = page.etag
-            weak = page.etag.removeprefix("W/").strip('"')
+            etag = page.etag if page.etag.startswith(('"', 'W/"')) else f'"{page.etag}"'  # quoted, as HTTP requires
+            headers["ETag"] = etag
+            weak = etag.removeprefix("W/").strip('"')
             sent = {tag.removeprefix("W/").strip('"') for tag in request.headers.get("if-none-match", "").split(",")}
             if weak and weak in sent:
                 not_modified = Response(status_code=304, headers=headers)
@@ -233,7 +234,10 @@ class PageRoute:
             script_origins=app.script_origins,
             frame_origins=app.frame_origins,
         )
-        return await finish(response)
+        await finish(response)
+        if "set-cookie" in response.headers and "no-store" not in cache_control:
+            response.headers["Cache-Control"] = "private, no-cache"  # a cookie must not be cached for others
+        return response
 
 
 def _without_component_ids(node: Any) -> Any:

@@ -110,7 +110,10 @@ class Cookies:
         return app._old_secret_keys if app is not None else ()
 
     def _signer(self) -> Signer:
-        return Signer(self._secret(), salt="rational.cookie", extra_secrets=self._old())
+        app = self._context.app
+        if app is not None:
+            return app.signer("rational.cookie")
+        return Signer(self._secret(), salt="rational.cookie")
 
     def _box(self) -> Box:
         return Box(self._secret(), salt="rational.cookie", extra_secrets=self._old())

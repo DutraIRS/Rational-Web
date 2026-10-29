@@ -153,3 +153,31 @@ def test_nested_parameters_become_stripes_form_encoding():
         "line_items[0][price]": "p",
         "line_items[0][quantity]": "1",
     }
+
+
+def test_webhooks_need_a_secret_and_accept_any_current_signature(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    app = App(secret_key="k" * 40)
+    unconfigured = Stripe(app, secret_key="sk_test_x", path="/open")
+    payload = b'{"type": "checkout.session.completed"}'
+    forged = TestClient(app).http.post(
+        "/open/webhook", content=payload, headers={"Stripe-Signature": sign(payload, "")}
+    )
+    assert forged.status_code == 503  # an empty secret would let anyone sign events
+    assert unconfigured.handlers == []
+
+    _, stripe, client, events = stripe_app(fake)
+    rolled = sign(payload, "whsec_old") + "," + sign(payload, "whsec_1").split(",")[1]  # two v1 while rolling
+    assert client.http.post("/stripe/webhook", content=payload, headers={"Stripe-Signature": rolled}).status_code == 200
+    assert events == [json.loads(payload)]
+
+
+def test_a_failed_checkout_shows_an_error_page(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    _, stripe, client, _ = stripe_app(fake)
+    fake.fail = True
+    link = stripe.checkout_url(line_items=[{"price": "price_1", "quantity": 1}], mode="payment")
+    response = client.http.get(link, follow_redirects=False)
+    assert response.status_code == 502 and "Checkout is not available" in response.text

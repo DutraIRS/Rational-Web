@@ -83,3 +83,34 @@ def test_etag_set_in_mount_from_the_page_data():
     again = client.http.get("/docs/faq", headers={"If-None-Match": '"faq-v3"'})
     assert again.status_code == 304
     assert client.http.get("/docs/other", headers={"If-None-Match": '"faq-v3"'}).status_code == 200
+
+
+def test_visitor_specific_pages_are_never_shared_in_a_cache():
+    from rational import Button, State
+
+    app = App()
+
+    @app.page("/live")
+    class Live(Page):
+        cache_control = "public, max-age=3600"  # ignored: this page carries a CSRF token and page id
+        n = State(0)
+
+        def bump(self):
+            self.n += 1
+
+        def render(self):
+            return Button(f"n={self.n}", on_click=self.bump)
+
+    @app.page("/greet")
+    class Greet(Page):
+        cache_control = "public, max-age=60"
+        etag = "v2"  # unquoted: quoted when sent
+
+        def render(self):
+            self.context.session["seen"] = True  # creates a session: its cookie must not be cached
+            return Text("hi")
+
+    assert TestClient(app).http.get("/live").headers["cache-control"] == "no-store"
+    greet = TestClient(app).http.get("/greet")  # a new visitor: this response starts their session
+    assert greet.headers["cache-control"] == "private, no-cache" and "set-cookie" in greet.headers
+    assert greet.headers["etag"] == '"v2"'

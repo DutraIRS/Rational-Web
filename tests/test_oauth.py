@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -172,77 +173,89 @@ def _id_token(payload: dict) -> str:
     return enc({"alg": "RS256", "kid": "ak"}) + "." + enc(payload) + "."
 
 
-def test_apple_sign_in_uses_form_post_and_signed_client_secret(fake, monkeypatch):
+def test_apple_sign_in_works_from_a_cross_site_form_post(monkeypatch):
+    import base64 as _b64
+    import json as _json
+
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
     import rational.oauth as oauth_module
     from rational.oauth import apple
 
     key, pem = _make_apple_key()
-    public = {"apple": key.public_key()}
-    id_token = _id_token({"sub": "a-1", "email": "ada@icloud.com", "email_verified": True})
+    claims = {"iss": "https://appleid.apple.com", "aud": "com.example.web", "sub": "a-1", "email": "ada@icloud.com"}
+    claims |= {"email_verified": "true", "exp": time.time() + 600}  # Apple sends "true" as text
     seen = {}
 
-    async def apple_fake(method, url, *, form=None, headers=None, **kwargs):
+    async def apple_fake(method, url, *, form=None, **kwargs):
         seen["form"] = form
         assert url == "https://appleid.apple.com/auth/token"
-        return {"access_token": "at", "token_type": "Bearer", "id_token": id_token}
+        return {"access_token": "at", "id_token": _id_token({**claims, "nonce": seen["nonce"]})}
 
     monkeypatch.setattr(oauth_module._http, "request", apple_fake)
     provider = apple(client_id="com.example.web", team_id="TEAM123", key_id="KEY1", private_key=pem)
-    app, oauth, signed_in = oauth_app(provider)
+    app, _, signed_in = oauth_app(provider)
     client = TestClient(app)
+    client.http.base_url = "https://shop.example"  # the flow cookie is Secure, as Apple requires HTTPS
 
     location, params = start(client, "/auth/apple/login")
-    assert location.netloc == "appleid.apple.com" and location.path == "/auth/authorize"
-    assert params["response_mode"] == "form_post"
-    assert "code_challenge" not in params  # Apple does not take PKCE
-    assert params["scope"] == "openid name email"
+    seen["nonce"] = params["nonce"]
+    assert location.netloc == "appleid.apple.com" and params["response_mode"] == "form_post"
+    assert "code_challenge" not in params and params["scope"] == "openid name email"
+    flow_cookie = next(c for c in client.http.cookies.jar if c.name == "rw_oauth")
+    assert flow_cookie.secure and flow_cookie.path == "/auth"
 
-    done = client.http.post(
-        "/auth/apple/callback",
-        data={
-            "code": "the-code",
-            "state": params["state"],
-            "user": '{"name": {"firstName": "Ada", "lastName": "Lovelace"}}',
-        },
-        follow_redirects=False,
-    )
-    assert done.status_code == 303
+    client.http.cookies.clear()  # a cross-site POST carries no SameSite=Lax cookie: only the flow's
+    client.http.cookies.set("rw_oauth", flow_cookie.value, domain=flow_cookie.domain, path="/auth")
+    form = {"code": "the-code", "state": params["state"], "user": '{"name": {"firstName": "Ada", "lastName": "L"}}'}
+    done = client.http.post("/auth/apple/callback", data=form, follow_redirects=False)
+    assert done.status_code == 303 and done.headers["location"] == "/"
+    person = signed_in[0]
+    assert (person.id, person.email, person.email_verified, person.name) == ("a-1", "ada@icloud.com", True, "Ada L")
 
-    form = seen["form"]
-    assert form["code"] == "the-code" and "code_verifier" not in form
-    secret = form["client_secret"]
-    header_b64, payload_b64, sig_b64 = secret.split(".")
-    import base64 as _b64
-    import json as _json
+    secret = seen["form"]["client_secret"]
+    assert "code_verifier" not in seen["form"]
 
     def pad(s):
         return _b64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
-    header = _json.loads(pad(header_b64))
+    header_b64, payload_b64, signature_b64 = secret.split(".")
+    assert _json.loads(pad(header_b64)) == {"alg": "ES256", "kid": "KEY1"}
     payload = _json.loads(pad(payload_b64))
-    assert header == {"alg": "ES256", "kid": "KEY1"}
-    assert payload["iss"] == "TEAM123" and payload["sub"] == "com.example.web"
-    assert payload["aud"] == "https://appleid.apple.com" and payload["exp"] > payload["iat"]
-    signature = pad(sig_b64)
-    r, s = decode_dss_signature(signature)
-    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+    assert payload["iss"] == "TEAM123" and payload["sub"] == "com.example.web" and payload["exp"] > payload["iat"]
+    raw = pad(signature_b64)
+    assert len(raw) == 64  # JWT form: r || s
+    der = encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big"))
+    key.public_key().verify(der, f"{header_b64}.{payload_b64}".encode(), ec.ECDSA(hashes.SHA256()))
 
-    message = f"{header_b64}.{payload_b64}".encode()
-    public["apple"].verify(encode_dss_signature(r, s), message, ec.ECDSA(hashes.SHA256()))
+    replayed = client.http.post("/auth/apple/callback", data=form, follow_redirects=False)
+    assert replayed.status_code == 400  # the flow cookie was cleared: a second use finds nothing
 
-    person = signed_in[0]
-    got = (person.id, person.email, person.email_verified, person.name)
-    assert got == ("a-1", "ada@icloud.com", True, "Ada Lovelace")
-    assert "Orders of ada@icloud.com" in client.http.get("/orders").text
 
-    reused = client.http.post(
-        "/auth/apple/callback", data={"code": "c", "state": params["state"]}, follow_redirects=False
-    )
-    assert reused.status_code == 400  # state is single-use
+def test_apple_id_tokens_must_match_this_sign_in(monkeypatch):
+    import rational.oauth as oauth_module
+    from rational.oauth import apple
+
+    _, pem = _make_apple_key()
+    good = {"iss": "https://appleid.apple.com", "aud": "com.example.web", "sub": "a-1", "exp": time.time() + 600}
+    for wrong in ({"aud": "com.other.app"}, {"iss": "https://evil.example"}, {"nonce": "another"}, {"exp": 1}):
+        answer = {}
+
+        async def apple_fake(method, url, answer=answer, wrong=wrong, **kwargs):
+            return {"access_token": "at", "id_token": _id_token({**good, "nonce": answer["nonce"], **wrong})}
+
+        monkeypatch.setattr(oauth_module._http, "request", apple_fake)
+        app, _, signed_in = oauth_app(apple(client_id="com.example.web", team_id="T", key_id="K", private_key=pem))
+        client = TestClient(app)
+        client.http.base_url = "https://shop.example"
+        _, params = start(client, "/auth/apple/login")
+        answer["nonce"] = params["nonce"]
+        failed = client.http.post(
+            "/auth/apple/callback", data={"code": "c", "state": params["state"]}, follow_redirects=False
+        )
+        assert failed.status_code == 502 and not signed_in, wrong
 
 
 def test_apple_without_cryptography_reports_a_helpful_error(monkeypatch):
