@@ -236,7 +236,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Bot protection: honeypot, form timing, rate limits for pages and `@remote` methods
 - [x] CAPTCHA field: Cloudflare Turnstile, hCaptcha, reCAPTCHA
 - [x] Sign-in with Google, GitHub, Microsoft and any OpenID Connect provider
-- [ ] Sign in with Apple (form-post callback, signed client secret)
+- [x] Sign in with Apple (form-post callback, signed client secret)
 - [ ] Stripe: Checkout, customer portal and signed webhooks, without the SDK
 - [ ] Error hook (`app.on_error`) for Sentry and similar, covering pages, events, `@remote` and jobs
 - [ ] Secret-key rotation: sign with the newest key, accept the older ones

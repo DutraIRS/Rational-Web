@@ -53,6 +53,25 @@ provider over HTTPS. ``next`` only accepts paths on this site. ``microsoft(tenan
 Microsoft accounts and Entra ID; ``oidc(name, issuer, ...)`` any OpenID Connect provider (Okta,
 Auth0, Keycloak, GitLab, ...). GitHub gives the verified primary email.
 
+Sign in with Apple
+'''''''''''''''''''
+
+Apple deviates from the redirect flow: the answer arrives as a signed form POST, the client
+secret is a JWT signed with a Services ID key for every token request, and there is no userinfo
+endpoint — the identity comes from the ID token::
+
+    from rational.oauth import apple
+
+    oauth.add(apple(
+        client_id="com.example.web",          # the Services ID
+        team_id="TEAM123",
+        key_id="KEY1",
+        private_key=APPLE_KEY_PEM,            # the .p8 contents
+    ))                                        # needs: pip install "rational[crypto]"
+
+Apple sends the person's name only on the first sign-in, as a form field; ``OAuthUser.name``
+carries it then. Afterwards only the stable ``sub`` and (relay) email remain.
+
 Password recovery, email verification and sign-in links
 --------------------------------------------------------
 

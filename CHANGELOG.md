@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Sign in with Apple (`rational.oauth.apple(client_id=..., team_id=..., key_id=..., private_key=...)`):
+  the client secret is an ES256 JWT signed for every token request, the callback arrives as a
+  signed form POST and the identity (and the first sign-in name) is read from the ID token.
+  Needs the `rational[crypto]` extra. `Provider` gained `secret()` (per-request client secrets),
+  `pkce=False` and `response_mode` for providers that deviate from the redirect + PKCE flow.
+
 ## [0.3.0a1] - 2026-10-29
 
 Production batteries: background jobs, email, account emails, SEO, bot protection and sign-in

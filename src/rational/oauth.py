@@ -26,11 +26,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import inspect
+import json
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import Request, Response
 from fastapi.responses import RedirectResponse
@@ -71,6 +72,12 @@ class Provider:
     userinfo_url: str = ""
     issuer: str | None = None  # OpenID Connect: endpoints are discovered from the issuer
     extra_params: dict[str, str] = field(default_factory=dict)
+    pkce: bool = True
+    response_mode: str = ""
+
+    def secret(self) -> str:
+        """The client secret for a token request. Apple signs a fresh JWT for each one."""
+        return self.client_secret
 
     async def endpoints(self) -> None:
         """Fill in the endpoints from the issuer's discovery document, once."""
@@ -149,6 +156,104 @@ def github(*, client_id: str, client_secret: str, scopes: tuple[str, ...] = ()) 
     )
 
 
+class Apple(Provider):
+    """Sign in with Apple.
+
+    The callback arrives as a signed form POST (``response_mode=form_post``), there is no
+    userinfo endpoint (the identity lives in the ID token) and the client secret is a JWT
+    signed with the private key of a Services ID, generated for every token request.
+    """
+
+    pkce = False
+    response_mode = "form_post"
+
+    def __init__(
+        self, *, client_id: str, team_id: str, key_id: str, private_key: str, scopes: tuple[str, ...] = ()
+    ) -> None:
+        super().__init__(
+            "apple",
+            client_id,
+            "",  # a fresh JWT is generated per token request in ``secret``
+            ("openid", "name", "email", *scopes),
+            authorize_url="https://appleid.apple.com/auth/authorize",
+            token_url="https://appleid.apple.com/auth/token",
+        )
+        self.pkce = False  # the dataclass defaults (PKCE on, redirect response) do not apply
+        self.response_mode = "form_post"
+        self.team_id = team_id
+        self.key_id = key_id
+        self.private_key = private_key
+        self.secret_lifetime = 15777000  # 183 days; Apple rejects secrets valid beyond six months
+
+    def secret(self) -> str:
+        import time
+
+        try:
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+        except ImportError as e:
+            msg = 'Sign in with Apple needs the cryptography package: pip install "rational[crypto]"'
+            raise ImportError(msg) from e
+
+        now = int(time.time())
+        header = {"alg": "ES256", "kid": self.key_id}
+        payload = {
+            "iss": self.team_id,
+            "iat": now,
+            "exp": now + self.secret_lifetime,
+            "aud": "https://appleid.apple.com",
+            "sub": self.client_id,
+        }
+        b64 = _b64url
+        signing_input = (
+            b64(json.dumps(header, separators=(",", ":")).encode())
+            + "."
+            + b64(json.dumps(payload, separators=(",", ":")).encode())
+        )
+        key = serialization.load_pem_private_key(self.private_key.encode(), password=None)
+        assert isinstance(key, ec.EllipticCurvePrivateKey)  # Apple keys are EC P-256
+        signature = key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256()))
+        return signing_input + "." + _b64url(signature)
+
+    async def user(
+        self, access_token: str, *, tokens: dict[str, Any] | None = None, form_user: str | None = None
+    ) -> OAuthUser:
+        claims = _id_token_claims((tokens or {}).get("id_token", ""))
+        name = None
+        if form_user:  # first sign-in only: the person's name arrives as a form field
+            try:
+                person = json.loads(form_user).get("name", {})
+                name = " ".join(p for p in (person.get("firstName"), person.get("lastName")) if p)
+            except ValueError:
+                pass
+        return OAuthUser(
+            provider=self.name,
+            id=str(claims["sub"]),
+            email=claims.get("email"),
+            email_verified=claims.get("email_verified") is True,
+            name=name,
+            picture=None,
+            raw=claims,
+        )
+
+
+def _id_token_claims(id_token: str) -> dict[str, Any]:
+    parts = id_token.split(".")
+    if len(parts) != 3:
+        raise ValueError("malformed ID token")
+    claims: dict[str, Any] = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    return claims
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def apple(*, client_id: str, team_id: str, key_id: str, private_key: str, scopes: tuple[str, ...] = ()) -> Apple:
+    """Sign in with Apple. ``private_key`` is the PEM text of the Services ID key."""
+    return Apple(client_id=client_id, team_id=team_id, key_id=key_id, private_key=private_key, scopes=scopes)
+
+
 OnLogin = Callable[["Context", OAuthUser], Any | Awaitable[Any]]
 
 
@@ -170,7 +275,7 @@ class OAuth:
             f"{self.path}/{{provider}}/login", self._login, methods=["GET"], include_in_schema=False
         )
         app.fastapi.add_api_route(
-            f"{self.path}/{{provider}}/callback", self._callback, methods=["GET"], include_in_schema=False
+            f"{self.path}/{{provider}}/callback", self._callback, methods=["GET", "POST"], include_in_schema=False
         )
 
     def add(self, provider: Provider) -> Provider:
@@ -206,10 +311,13 @@ class OAuth:
             "scope": " ".join(chosen.scopes),
             "state": flow["state"],
             "nonce": flow["nonce"],
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
             **chosen.extra_params,
         }
+        if chosen.response_mode:
+            params["response_mode"] = chosen.response_mode
+        if chosen.pkce:
+            params["code_challenge"] = challenge
+            params["code_challenge_method"] = "S256"
         ctx = await self.app.context_for(request)
         async with self.app.session_lock(ctx):
             ctx.session[_SESSION_KEY] = flow
@@ -229,7 +337,13 @@ class OAuth:
 
     async def _complete(self, request: Request, provider: str, ctx: Context, flow: Any) -> Response:
         chosen = self.providers.get(provider)
-        query = request.query_params
+        form_user = None
+        if request.method == "POST":  # Apple answers with a form post, not a redirect
+            body = (await request.body()).decode()
+            query = {k: v[0] for k, v in parse_qs(body).items()}
+            form_user = query.get("user")
+        else:
+            query = dict(request.query_params)
         if chosen is None or not isinstance(flow, dict) or flow.get("provider") != provider:
             return self._fail(request, 400, "This sign-in link is not valid; please start again")
         if not secrets.compare_digest(str(query.get("state", "")), str(flow["state"])):
@@ -245,11 +359,14 @@ class OAuth:
                     "code": query["code"],
                     "redirect_uri": self.redirect_uri(provider),
                     "client_id": chosen.client_id,
-                    "client_secret": chosen.client_secret,
-                    "code_verifier": flow["verifier"],
+                    "client_secret": chosen.secret(),
+                    **({"code_verifier": flow["verifier"]} if chosen.pkce else {}),
                 },
             )
-            person = await chosen.user(tokens["access_token"])
+            if isinstance(chosen, Apple):
+                person = await chosen.user(tokens["access_token"], tokens=tokens, form_user=form_user)
+            else:
+                person = await chosen.user(tokens["access_token"])
         except (_http.HTTPError, KeyError, TypeError):
             return self._fail(request, 502, f"Could not sign in with {provider}; please try again")
         principal = self.on_login(ctx, person)

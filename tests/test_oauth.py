@@ -147,3 +147,118 @@ def test_microsoft_and_custom_providers_are_configured_without_discovery_calls(f
     assert provider.authorize_url == "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize"
     custom = oidc("okta", "https://dev.okta.example", client_id="o", client_secret="s", scopes=("groups",))
     assert custom.scopes == ("openid", "email", "profile", "groups") and custom.authorize_url == ""
+
+
+def _make_apple_key():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    return key, pem
+
+
+def _id_token(payload: dict) -> str:
+    import base64 as _b64
+    import json as _json
+
+    def enc(d):
+        return _b64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
+
+    return enc({"alg": "RS256", "kid": "ak"}) + "." + enc(payload) + "."
+
+
+def test_apple_sign_in_uses_form_post_and_signed_client_secret(fake, monkeypatch):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    import rational.oauth as oauth_module
+    from rational.oauth import apple
+
+    key, pem = _make_apple_key()
+    public = {"apple": key.public_key()}
+    id_token = _id_token({"sub": "a-1", "email": "ada@icloud.com", "email_verified": True})
+    seen = {}
+
+    async def apple_fake(method, url, *, form=None, headers=None, **kwargs):
+        seen["form"] = form
+        assert url == "https://appleid.apple.com/auth/token"
+        return {"access_token": "at", "token_type": "Bearer", "id_token": id_token}
+
+    monkeypatch.setattr(oauth_module._http, "request", apple_fake)
+    provider = apple(client_id="com.example.web", team_id="TEAM123", key_id="KEY1", private_key=pem)
+    app, oauth, signed_in = oauth_app(provider)
+    client = TestClient(app)
+
+    location, params = start(client, "/auth/apple/login")
+    assert location.netloc == "appleid.apple.com" and location.path == "/auth/authorize"
+    assert params["response_mode"] == "form_post"
+    assert "code_challenge" not in params  # Apple does not take PKCE
+    assert params["scope"] == "openid name email"
+
+    done = client.http.post(
+        "/auth/apple/callback",
+        data={
+            "code": "the-code",
+            "state": params["state"],
+            "user": '{"name": {"firstName": "Ada", "lastName": "Lovelace"}}',
+        },
+        follow_redirects=False,
+    )
+    assert done.status_code == 303
+
+    form = seen["form"]
+    assert form["code"] == "the-code" and "code_verifier" not in form
+    secret = form["client_secret"]
+    header_b64, payload_b64, sig_b64 = secret.split(".")
+    import base64 as _b64
+    import json as _json
+
+    def pad(s):
+        return _b64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+    header = _json.loads(pad(header_b64))
+    payload = _json.loads(pad(payload_b64))
+    assert header == {"alg": "ES256", "kid": "KEY1"}
+    assert payload["iss"] == "TEAM123" and payload["sub"] == "com.example.web"
+    assert payload["aud"] == "https://appleid.apple.com" and payload["exp"] > payload["iat"]
+    signature = pad(sig_b64)
+    r, s = decode_dss_signature(signature)
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    message = f"{header_b64}.{payload_b64}".encode()
+    public["apple"].verify(encode_dss_signature(r, s), message, ec.ECDSA(hashes.SHA256()))
+
+    person = signed_in[0]
+    got = (person.id, person.email, person.email_verified, person.name)
+    assert got == ("a-1", "ada@icloud.com", True, "Ada Lovelace")
+    assert "Orders of ada@icloud.com" in client.http.get("/orders").text
+
+    reused = client.http.post(
+        "/auth/apple/callback", data={"code": "c", "state": params["state"]}, follow_redirects=False
+    )
+    assert reused.status_code == 400  # state is single-use
+
+
+def test_apple_without_cryptography_reports_a_helpful_error(monkeypatch):
+    import builtins
+
+    from rational.oauth import apple
+
+    key, pem = _make_apple_key()
+    provider = apple(client_id="c", team_id="t", key_id="k", private_key=pem)
+    real_import = builtins.__import__
+
+    def no_crypto(name, *args, **kwargs):
+        if name.startswith("cryptography"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_crypto)
+    with pytest.raises(ImportError, match="rational\\[crypto\\]"):
+        provider.secret()
