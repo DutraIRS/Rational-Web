@@ -50,7 +50,8 @@ class PageRoute:
 
     def __post_init__(self) -> None:
         params = PATH_PARAM.findall(self.path)
-        missing = [p for p in params if p not in self.page._rw_props]
+        # A {lang} parameter may instead set the page's language (/{lang}/docs/faq.html).
+        missing = [p for p in params if p not in self.page._rw_props and p != "lang"]
         if missing:
             raise TypeError(f"{self.page.__name__} must declare path parameter(s) {missing} as annotated props")
         try:
@@ -77,8 +78,14 @@ class PageRoute:
             urls.append(self.url(**params))
         return urls
 
-    def props_from(self, params: dict[str, Any]) -> dict[str, Any]:
-        return {name: a.validate_python(params[name]) for name, a in self.adapters.items()}
+    def build(self, params: Mapping[str, Any]) -> Page:
+        """A page for these path parameters (raises ``ValidationError`` for values of the wrong type)."""
+        props = {name: a.validate_python(params[name]) for name, a in self.adapters.items()}
+        lang = props.pop("lang", None) if "lang" not in self.page._rw_props else None
+        page = self.page(**props)
+        if lang is not None:
+            page.lang = lang
+        return page
 
     async def __call__(self, request: Request) -> Response:
         app = self.app
@@ -96,7 +103,7 @@ class PageRoute:
             return response
 
         try:
-            props = {name: a.validate_python(request.path_params[name]) for name, a in self.adapters.items()}
+            page = self.build(request.path_params)
         except ValidationError:
             return await finish(error_page(app, request, 404, "Page not found"))
         if self.auth == "required" and ctx.user is None:
@@ -105,7 +112,6 @@ class PageRoute:
                 return await finish(RedirectResponse(login, status_code=303))
             return await finish(error_page(app, request, 401, "Please sign in to view this page"))
 
-        page = self.page(**props)
         runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
         runtime.origin = (self.path, {k: str(v) for k, v in request.path_params.items()})
         try:
@@ -184,11 +190,14 @@ class PageRoute:
         scripts = [base + app.islands_src, *(base + path for path in runtime.islands)] if runtime.islands else []
         runtime.sheet.drain()
         nonce = secrets.token_urlsafe(16) if app.csp else None
+        title = page.title or self.title or app.title
+        lang = page.lang or ctx.locale
+        seo = app.seo.head(page, self.url(**request.path_params), title, lang) if app.seo else ""
         html = render_document(
             body=to_html(root if manifest else _without_component_ids(root)),
-            title=page.title or self.title or app.title,
+            title=title,
             description=page.description,
-            lang=page.lang or ctx.locale,
+            lang=lang,
             theme_href=base + app.theme_href if app.theme_href else None,
             page_css=runtime.sheet.css(),
             data_theme=app.data_theme(request),
@@ -197,7 +206,7 @@ class PageRoute:
             nonce=nonce,
             favicon=app.favicon if page.favicon is None else page.favicon,
             head_start=page.head_start,
-            head_extra=app.head_extra(nonce, base) + page.head_end,
+            head_extra=seo + app.head_extra(nonce, base) + page.head_end,
             scripts=scripts,
             dir=page.dir,
         )

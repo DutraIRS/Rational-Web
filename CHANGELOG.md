@@ -23,6 +23,11 @@ All notable changes to this project are documented here. The format follows
 - Account emails (`rational.accounts`): subclass `Accounts` with four lookups to get password
   reset (single-use links), email verification and one-time sign-in links, with no account
   discovery and at most one message per address a minute. `Mailer` also sends element trees.
+- SEO (`rational.seo`): `Seo(app, site_url=...)` adds canonical URLs, Open Graph and Twitter
+  tags, `hreflang` alternates, JSON-LD (`structured(...)`) and `noindex` to pages, and serves
+  `/sitemap.xml` (with `paths=` routes) and `/robots.txt`; a static export writes both. Pages gain
+  `image`, `canonical`, `noindex`, `alternates` and `structured_data`; a `{lang}` path parameter
+  sets the page's language.
 
 ### Changed
 - `Page.title` and `Page.description` can be set in `mount()` (they are no longer class variables).

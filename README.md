@@ -229,7 +229,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Email: `Mailer` (SMTP, HTTP providers), emails written as components, captured in tests
 - [x] Background jobs and scheduled tasks with retries
 - [x] Password recovery, email verification and magic-link sign-in
-- [ ] SEO: `sitemap.xml`, `robots.txt`, canonical URLs, Open Graph, JSON-LD, `hreflang`
+- [x] SEO: `sitemap.xml`, `robots.txt`, canonical URLs, Open Graph, JSON-LD, `hreflang`
 - [ ] Bot protection: honeypot, form timing, rate limits for pages and `@remote` methods
 - [ ] CAPTCHA field: Cloudflare Turnstile, hCaptcha, reCAPTCHA
 - [ ] Sign-in with Google, GitHub, Microsoft and Apple (OpenID Connect / OAuth 2)

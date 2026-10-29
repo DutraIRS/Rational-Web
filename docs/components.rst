@@ -37,7 +37,9 @@ The HTML document around a page is set by attributes that are *not* props: ``tit
 (``"rtl"`` for Arabic, Hebrew, Persian or Urdu), ``favicon`` (``False``: no icon link),
 ``head_start`` (trusted markup right after ``<meta charset>``, such as a CSP ``<meta>``) and
 ``head_end`` (trusted markup closing ``<head>``, after Rational's and the app's stylesheets, so a
-page's own CSS wins). Set them on the class, or in ``mount()`` when they come from the page's
+page's own CSS wins). ``image``, ``canonical``, ``noindex``, ``alternates`` and
+``structured_data`` feed search engines and link previews (see :doc:`batteries`). A ``{lang}``
+path parameter sets ``lang``. Set them on the class, or in ``mount()`` when they come from the page's
 data, so one class can serve many pages:
 
 .. code-block:: python

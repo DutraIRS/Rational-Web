@@ -212,7 +212,10 @@ class Page(Component):
     """
 
     auth: ClassVar[str | None] = None
-    _rw_reserved = frozenset({"title", "description", "lang", "dir", "favicon", "head_start", "head_end"})
+    _rw_reserved = frozenset(
+        {"title", "description", "lang", "dir", "favicon", "head_start", "head_end"}
+        | {"image", "canonical", "noindex", "alternates", "structured_data"}
+    )
 
     # The HTML document around the page: set these on the class, or in ``mount()`` from the
     # page's data (one class serving many pages, like ``/{lang}/docs/{slug}.html``).
@@ -223,6 +226,12 @@ class Page(Component):
     favicon: str | Literal[False] | None = None  # None: App(favicon=...); False: no icon link at all
     head_start: str = ""  # trusted markup right after <meta charset>: a CSP <meta>, early metas
     head_end: str = ""  # trusted markup closing <head>, after Rational's and the app's stylesheets
+    # Search engines and link previews, written when the app has rational.seo.Seo:
+    image: str | None = None  # the preview image (Open Graph); default: Seo(image=...)
+    canonical: str | None = None  # the page's one true URL, if others show the same content
+    noindex: bool = False  # ask search engines to leave this page out (and keep it out of the sitemap)
+    alternates: dict[str, str] | None = None  # translations: {"es": "/es/docs/faq.html", ...}
+    structured_data: Any = None  # schema.org data, written as JSON-LD (see rational.seo.structured)
 
     @property
     def request(self) -> Any:

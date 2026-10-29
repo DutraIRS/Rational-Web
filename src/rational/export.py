@@ -81,6 +81,11 @@ async def export_site(
                     report.pages.append(url)
                     scripts = scripts or RUNTIME_PATH in body
 
+            for path in app.exported_files if report.pages else ():  # sitemap.xml, robots.txt, ...
+                status, body = await _get(app, path, base)
+                if status == 200:
+                    _write(root, path.lstrip("/"), body)
+                    report.assets.append(path)
             if report.pages and app.theme_href:
                 _write(root, "_rational/theme.css", app.theme_css.encode())
                 report.assets.append("/_rational/theme.css")

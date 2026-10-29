@@ -170,6 +170,37 @@ room on every worker when the app has a bus (``App(bus=RedisBus(...))``). Raisin
 
 Pages do not need sockets to stay live: server push for pages is built in (see :doc:`concurrency`).
 
+Search engines and link previews
+--------------------------------
+
+:class:`~rational.seo.Seo` gives every page what search engines and link previews read, and
+serves ``/sitemap.xml`` and ``/robots.txt``::
+
+    from rational.seo import Seo, structured
+
+    Seo(app, site_url="https://shop.example", site_name="Shop", image="/assets/preview.png",
+        twitter="@shop", disallow=["/admin"])
+
+    @app.page("/{lang}/products/{slug}.html", paths=PRODUCT_PATHS)
+    class Product(Page):
+        slug: str
+
+        def mount(self):
+            self.product = load_product(self.lang, self.slug)
+            self.title = self.product.name
+            self.description = self.product.summary
+            self.image = self.product.photo_url
+            self.alternates = {lang: f"/{lang}/products/{self.slug}.html" for lang in LANGUAGES}
+            self.structured_data = structured("Product", name=self.product.name)
+
+* Each page gets a canonical URL (``canonical`` overrides it), Open Graph and Twitter tags from its
+  ``title``, ``description`` and ``image``, ``hreflang`` links from ``alternates`` and its
+  ``structured_data`` as JSON-LD. ``noindex = True`` asks search engines to leave a page out.
+* ``/sitemap.xml`` lists every page anyone may see: not ``noindex`` pages or pages that need
+  sign-in, and parameter routes through their ``paths=``. A static export writes both files.
+* A ``{lang}`` path parameter sets the page's language (``<html lang>``), so translated sites need
+  no extra prop.
+
 Background jobs
 ---------------
 

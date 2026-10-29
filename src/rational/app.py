@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from .backend.database import Database
     from .bus import Bus
     from .client.compiler import ClientModule
+    from .seo import Seo
     from .stores import SessionDriver
 
 log = logging.getLogger("rational")
@@ -161,6 +162,8 @@ class App:
             self.sessions.on_saved = self._announce_session
         self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
         self.routes: dict[str, PageRoute] = {}  # by route path
+        self.seo: Seo | None = None  # set by rational.seo.Seo
+        self.exported_files: list[str] = []  # extra paths a static export writes (sitemap.xml, ...)
         self._routes_by_class: dict[type[Page], list[PageRoute]] = {}
         self.resume: PageResumer | None = (
             PageResumer(self, page_snapshots, page_snapshot_ttl) if page_snapshots is not None else None

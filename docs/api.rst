@@ -121,6 +121,9 @@ Jobs and email
 .. automodule:: rational.accounts
    :members: Accounts
 
+.. automodule:: rational.seo
+   :members: Seo, structured
+
 Errors and redirects
 --------------------
 
