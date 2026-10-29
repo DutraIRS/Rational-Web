@@ -12,6 +12,11 @@ All notable changes to this project are documented here. The format follows
   signed form POST and the identity (and the first sign-in name) is read from the ID token.
   Needs the `rational[crypto]` extra. `Provider` gained `secret()` (per-request client secrets),
   `pkce=False` and `response_mode` for providers that deviate from the redirect + PKCE flow.
+- Stripe (`rational.stripe`): `Stripe(app, secret_key=...)` with no SDK — `checkout_url(...)`
+  signs the parameters into a link that creates the Checkout Session on click (no API call while
+  rendering), `checkout(...)`/`portal(...)`/`customer(...)` call the REST API directly, and
+  `@stripe.handler` receives only webhook events whose `Stripe-Signature` header verifies against
+  the exact raw body (stale or mismatched signatures are rejected before any handler runs).
 
 ## [0.3.0a1] - 2026-10-29
 

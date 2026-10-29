@@ -130,6 +130,9 @@ Jobs and email
 .. automodule:: rational.bots
    :members: limit, Limiter, human, HumanCheck, Captcha, TooManyRequests, NotHuman
 
+.. automodule:: rational.stripe
+   :members: Stripe, StripeError
+
 Errors and redirects
 --------------------
 

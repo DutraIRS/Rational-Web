@@ -72,6 +72,34 @@ endpoint — the identity comes from the ID token::
 Apple sends the person's name only on the first sign-in, as a form field; ``OAuthUser.name``
 carries it then. Afterwards only the stable ``sub`` and (relay) email remain.
 
+Taking payments with Stripe
+---------------------------
+
+:class:`~rational.stripe.Stripe` covers Checkout, the customer portal and webhooks, talking to
+the REST API directly (``pip install`` nothing extra)::
+
+    from rational.stripe import Stripe
+
+    stripe = Stripe(app, secret_key=STRIPE_SECRET_KEY, webhook_secret=STRIPE_WEBHOOK_SECRET)
+
+    ButtonLink("Upgrade", href=stripe.checkout_url(     # a signed link; Stripe is called on click
+        line_items=[{"price": "price_123", "quantity": 1}],
+        mode="payment",                                  # or "subscription"
+        success_url="/done?session_id={CHECKOUT_SESSION_ID}",
+        cancel_url="/upgrade",
+    ))
+
+    @stripe.handler
+    async def on_stripe(event):                          # only verified events reach here
+        if event["type"] == "checkout.session.completed":
+            ...
+
+``stripe.checkout_url`` signs the parameters, so nothing is sent to Stripe while the page
+renders and the link cannot be altered. ``stripe.portal(customer_id, return_url=...)`` opens the
+customer portal. Webhook handlers run only after the ``Stripe-Signature`` header is checked
+against the raw request body, with a five-minute replay window. Point Stripe at
+``https://shop.example/stripe/webhook``.
+
 Password recovery, email verification and sign-in links
 --------------------------------------------------------
 

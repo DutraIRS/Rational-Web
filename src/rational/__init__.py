@@ -127,6 +127,8 @@ __all__ = [
     "Spacer",
     "Stack",
     "State",
+    "Stripe",
+    "StripeError",
     "Style",
     "Suspense",
     "Table",
