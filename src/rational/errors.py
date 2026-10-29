@@ -2,7 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fastapi import Request
+
+
+@dataclass(frozen=True)
+class ErrorInfo:
+    """What ``app.on_error`` receives: an unhandled exception and where it happened.
+
+    ``kind`` is one of ``"page"``, ``"event"``, ``"remote"`` or ``"job"``. ``request`` is the
+    incoming request for the first three and ``None`` for jobs. ``context`` is the page or
+    request context when one exists. ``extra`` carries per-kind detail: the handler id for
+    events, the service and method for remotes, the job name and attempt for jobs.
+    """
+
+    exc: BaseException
+    kind: str
+    request: Request | None = None
+    context: Any = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class RationalError(Exception):

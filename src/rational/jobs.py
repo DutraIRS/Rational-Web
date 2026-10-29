@@ -213,6 +213,7 @@ class Jobs:
         self._workers: list[asyncio.Task[None]] = []
         self._wake: asyncio.Event | None = None  # made in start(), on the loop that runs the workers
         self._stopping = False
+        self.app = app
         if app is not None:
             app.on_startup(self.start)
             app.on_shutdown(self.stop)
@@ -317,17 +318,34 @@ class Jobs:
             await job._run(data["args"], data["kwargs"])
         except asyncio.CancelledError:
             raise  # stopping: the lease runs out and another worker takes the job
-        except Exception:
+        except Exception as exc:
             attempt = data["attempt"] + 1
             if attempt > job.retries:
                 log.exception("job %s (%s) failed after %d attempts", job.name, data["id"], attempt)
+                await self._report(exc, data, job, attempt, final=True)
                 await self.store.release(record)
                 return
             log.warning("job %s (%s) failed, retry %d of %d", job.name, data["id"], attempt, job.retries, exc_info=True)
+            await self._report(exc, data, job, attempt)
             retry = _dump({**data, "attempt": attempt})
             await self.store.release(record, retry, time.time() + job.backoff**attempt)
             return
         await self.store.release(record)
+
+    async def _report(
+        self, exc: BaseException, data: dict[str, Any], job: Job[Any, Any], attempt: int, *, final: bool = False
+    ) -> None:
+        """Send a failed job to ``app.on_error`` hooks, when the app has any."""
+        if self.app is None or not self.app._error_hooks:
+            return
+        from .errors import ErrorInfo
+
+        info = ErrorInfo(
+            exc,
+            "job",
+            extra={"job": data["job"], "id": data["id"], "attempt": attempt, "final": final},
+        )
+        await self.app._run_error_hooks(info)
 
 
 def _dump(record: dict[str, Any]) -> bytes:

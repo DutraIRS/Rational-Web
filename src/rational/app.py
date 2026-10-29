@@ -28,6 +28,7 @@ from .concurrency import SyncHandlers
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
+from .errors import ErrorInfo
 from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddleware, base_path
 from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
@@ -179,6 +180,7 @@ class App:
         self.authenticator: Callable[[Context], Any] | None = None
         self._startup: list[Callable[[], Any]] = []
         self._shutdown: list[Callable[[], Any]] = []
+        self._error_hooks: list[Callable[[ErrorInfo], Any]] = []
         self._startup_error: BaseException | None = None
         self._requests = 0
 
@@ -339,6 +341,28 @@ class App:
         """Register a shutdown hook (sync or async), run when the app stops."""
         self._shutdown.append(fn)
         return fn
+
+    def on_error(self, fn: Callable[[ErrorInfo], Any]) -> Callable[[ErrorInfo], Any]:
+        """Register an error hook (sync or async) for unhandled exceptions.
+
+        Hooks cover pages, event handlers, ``@remote`` methods and jobs, and are how Sentry and
+        similar services plug in. Exceptions raised by a hook are logged and discarded: error
+        hooks must never break error handling.
+        """
+        self._error_hooks.append(fn)
+        return fn
+
+    async def _run_error_hooks(self, info: ErrorInfo) -> None:
+        import contextlib
+
+        for hook in self._error_hooks:
+            try:
+                result = hook(info)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                with contextlib.suppress(Exception):
+                    logging.getLogger("rational").exception("error hook %r failed", getattr(hook, "__name__", hook))
 
     def authenticate(self, fn: Callable[[Context], Any]) -> Callable[[Context], Any]:
         """Replace the default authenticator (``session.user``).
@@ -571,6 +595,7 @@ class App:
 
     async def _server_error(self, request: Request, exc: Exception) -> Response:
         logging.getLogger("rational").exception("unhandled request error", exc_info=(type(exc), exc, exc.__traceback__))
+        await self._run_error_hooks(ErrorInfo(exc, "page", request))
         response = PlainTextResponse("Internal Server Error", status_code=500)
         ctx = getattr(request.state, "rational_context", None)
         if isinstance(ctx, Context):

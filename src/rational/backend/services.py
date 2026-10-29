@@ -158,8 +158,14 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
                 error_response = json_error(e.status, e.code, e.message, details=e.details)
                 await app.finish(request, error_response, ctx)
                 return error_response
-            except Exception:
+            except Exception as e:
                 log.exception("error in remote %s.%s", cls.__name__, name)
+                if app._error_hooks:
+                    from rational.errors import ErrorInfo
+
+                    await app._run_error_hooks(
+                        ErrorInfo(e, "remote", request, extra={"service": cls.__name__, "method": name})
+                    )
                 error_response = json_error(500, "internal", "Something went wrong")
                 await app.finish(request, error_response, ctx)
                 return error_response

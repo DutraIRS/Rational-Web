@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format follows
   rendering), `checkout(...)`/`portal(...)`/`customer(...)` call the REST API directly, and
   `@stripe.handler` receives only webhook events whose `Stripe-Signature` header verifies against
   the exact raw body (stale or mismatched signatures are rejected before any handler runs).
+- `app.on_error` hooks (`rational.errors.ErrorInfo`): one registration receives the unhandled
+  exceptions of pages, event handlers, `@remote` methods and jobs, with the kind, request and
+  per-kind detail (handler, service/method, job and attempt). Exceptions raised by a hook are
+  logged and discarded, so reporting can never break error handling.
 
 ## [0.3.0a1] - 2026-10-29
 
