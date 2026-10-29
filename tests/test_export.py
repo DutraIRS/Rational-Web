@@ -2,9 +2,10 @@ import asyncio
 
 import pytest
 
-from rational import App, Button, Column, Component, Heading, Page, State, Text
+from rational import App, Button, Column, Component, Heading, Page, State, Text, h
 from rational.cli import main
 from rational.export import export_site
+from rational.testing import TestClient
 
 
 class Counter(Component):
@@ -104,3 +105,119 @@ def test_cli_export_flag(tmp_path, capsys):
     assert exit_info.value.code == 0
     assert "exported" in (out / "index.html").read_text("utf-8")
     assert "exported  /" in capsys.readouterr().out
+
+
+DOCS = {"faq": "Questions", "install": "Installing"}
+
+
+def docs_site():
+    """A translated documentation site that brings its own stylesheet and keeps its URLs."""
+    app = App(title="Docs", theme=None, stylesheets=["/assets/site.css"], favicon=False)
+
+    @app.page(
+        "/{language}/docs/{slug}.html",
+        paths=[{"language": lang, "slug": slug} for lang in ("en", "ar") for slug in DOCS],
+    )
+    class Doc(Page):
+        language: str
+        slug: str
+        head_start = """<meta http-equiv="Content-Security-Policy" content="style-src 'self'">"""
+
+        def mount(self):
+            self.title = DOCS[self.slug]
+            self.lang = self.language
+            self.dir = "rtl" if self.language == "ar" else None
+            self.head_end = '<link rel="icon" href="../../assets/icon.png">'
+
+        def render(self):
+            return h("main", h("h1", DOCS[self.slug]))  # plain markup: no built-in component styles
+
+    @app.page("/404.html")
+    class Missing(Page):
+        def render(self):
+            return h("p", "Lost?")
+
+    return app
+
+
+def test_a_site_with_its_own_stylesheet_keeps_its_urls_and_document_settings(tmp_path):
+    report = asyncio.run(export_site(docs_site(), tmp_path, relative=True))
+    assert sorted(report.pages) == [
+        "/404.html",
+        "/ar/docs/faq.html",
+        "/ar/docs/install.html",
+        "/en/docs/faq.html",
+        "/en/docs/install.html",
+    ]
+
+    html = (tmp_path / "ar" / "docs" / "faq.html").read_text("utf-8")
+    assert '<html lang="ar" dir="rtl">' in html and "<title>Questions</title>" in html
+    head = '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">'
+    assert html.startswith(head + '<meta http-equiv="Content-Security-Policy"')  # before anything it governs
+    assert '<link rel="stylesheet" href="../../assets/site.css">' in html  # relative: works from disk too
+    assert html.index("site.css") < html.index("icon.png")  # the page's own head markup comes last
+    assert html.count('rel="icon"') == 1  # favicon=False: only the page's own icon
+    for rational_only in ("theme.css", "rw-styles", "data-rw-c", "data-theme", "<style"):
+        assert rational_only not in html
+    assert '<html lang="en">' in (tmp_path / "en" / "docs" / "faq.html").read_text("utf-8")
+    assert not (tmp_path / "_rational").exists()
+    assert "Lost?" in (tmp_path / "404.html").read_text("utf-8")  # the site's own 404 page is kept
+
+
+def test_relative_links_follow_each_page_and_the_404_page_is_optional(tmp_path):
+    app = App(title="Site")
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Text("Home")
+
+    @app.page("/guide/start.html")
+    class Start(Page):
+        def render(self):
+            return Text("Start")
+
+    asyncio.run(export_site(app, tmp_path, relative=True, not_found=False))
+    assert 'href="./_rational/theme.css' in (tmp_path / "index.html").read_text("utf-8")
+    assert 'href="../_rational/theme.css' in (tmp_path / "guide" / "start.html").read_text("utf-8")
+    assert not (tmp_path / "404.html").exists()
+
+
+def test_path_parameters_need_their_values_listed(tmp_path):
+    app = App()
+
+    @app.page("/tags/{tag}.html", paths=lambda: [{"tag": "news"}])
+    class Tag(Page):
+        tag: str
+
+        def render(self):
+            return Text(self.tag)
+
+    @app.page("/wrong/{slug}.html", paths=[{"name": "x"}])
+    class Wrong(Page):
+        slug: str
+
+        def render(self):
+            return Text(self.slug)
+
+    with pytest.raises(ValueError, match=r"exactly \['slug'\]"):
+        asyncio.run(export_site(app, tmp_path))
+    del app.routes["/wrong/{slug}.html"]
+    assert asyncio.run(export_site(app, tmp_path)).pages == ["/tags/news.html"]
+
+
+def test_document_settings_are_not_props_and_dir_is_checked():
+    assert "title" not in Page._rw_props and "lang" not in Page._rw_props
+
+    class Plain(Page):
+        title = "Fixed"
+        dir = "sideways"  # type: ignore[assignment]
+
+        def render(self):
+            return Text("x")
+
+    assert "title" not in Plain._rw_props and "dir" not in Plain._rw_props
+    app = App()
+    app.page("/")(Plain)
+    with pytest.raises(ValueError, match="dir must be"):
+        TestClient(app).http.get("/")

@@ -76,7 +76,8 @@ Themes
    app = App(theme=brand)
 
 Every theme includes a reset, a visible ``:focus-visible`` ring and
-``prefers-reduced-motion`` support.
+``prefers-reduced-motion`` support. ``App(theme=None)`` leaves the theme stylesheet out entirely,
+for a site that brings its own (see :ref:`static-export`).
 
 Bootstrap, Tailwind and other stylesheets
 -----------------------------------------

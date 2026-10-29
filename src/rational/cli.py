@@ -79,17 +79,23 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         default=None,
         help="write the app's static pages to DIR as plain HTML instead of serving (use --root-path for sub-paths)",
     )
+    parser.add_argument(
+        "--relative",
+        action="store_true",
+        help="export: link assets relative to each page, so the site also works from disk",
+    )
+    parser.add_argument("--no-404", action="store_true", help="export: write no 404.html")
     return parser
 
 
-def export(app: App, directory: str, root_path: str = "") -> int:
+def export(app: App, directory: str, root_path: str = "", *, relative: bool = False, not_found: bool = True) -> int:
     """Run a static export and print what was written and skipped. Returns the exit code."""
     import asyncio
 
     from .export import export_site
 
     os.environ.pop(DEV_ENV, None)
-    report = asyncio.run(export_site(app, directory, base_path=root_path))
+    report = asyncio.run(export_site(app, directory, base_path=root_path, relative=relative, not_found=not_found))
     for page in report.pages:
         print(f"  exported  {page}")
     for page, reason in report.skipped:
@@ -108,7 +114,7 @@ def serve(app: App, argv: Sequence[str] | None = None, *, target: Target | None 
     """Parse ``argv`` (default: ``sys.argv[1:]``) and run ``app`` with uvicorn."""
     args = build_parser().parse_args(sys.argv[1:] if argv is None else list(argv))
     if args.export:
-        raise SystemExit(export(app, args.export, args.root_path))
+        raise SystemExit(export(app, args.export, args.root_path, relative=args.relative, not_found=not args.no_404))
     mode = resolve_mode(overrides.pop("mode", None) or args.mode)
     target = target or _main_target(app)
     port = overrides.pop("port", None) or args.port or int(os.environ.get("PORT", 8000))

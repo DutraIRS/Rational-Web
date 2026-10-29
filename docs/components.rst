@@ -32,6 +32,27 @@ Path parameters are props too, validated against their annotation:
    class UserPage(Page):
        user_id: int          # "/users/abc" -> 404
 
+The HTML document around a page is set by attributes that are *not* props: ``title``,
+``description``, ``lang`` (``<html lang>``, default: the request's locale), ``dir``
+(``"rtl"`` for Arabic, Hebrew, Persian or Urdu), ``favicon`` (``False``: no icon link),
+``head_start`` (trusted markup right after ``<meta charset>``, such as a CSP ``<meta>``) and
+``head_end`` (trusted markup closing ``<head>``, after Rational's and the app's stylesheets, so a
+page's own CSS wins). Set them on the class, or in ``mount()`` when they come from the page's
+data, so one class can serve many pages:
+
+.. code-block:: python
+
+   @app.page("/{language}/docs/{slug}.html")
+   class Doc(Page):
+       language: str
+       slug: str
+
+       def mount(self):
+           self.doc = load_doc(self.language, self.slug)
+           self.title = self.doc.title
+           self.lang = self.language
+           self.dir = "rtl" if self.language == "ar" else None
+
 Lifecycle
 ---------
 

@@ -1,13 +1,15 @@
 """Static export: render an app's static pages to plain HTML files.
 
-``python app.py --export site/`` writes ``site/index.html``, ``site/<path>/index.html``, the
-theme stylesheet and every directory mounted with ``app.static``. The result can be hosted on
-any static file host (GitHub Pages, Netlify, S3, ...).
+``python app.py --export site/`` writes ``site/index.html``, ``site/<path>/index.html`` (or
+``site/<path>`` for a route ending in ``.html``), the theme stylesheet and every directory mounted
+with ``app.static``. The result can be hosted on any static file host (GitHub Pages, Netlify,
+S3, ...).
 
-Only pages that work without a server can be exported: no path parameters, no sign-in
-requirement and no server events. Client components are fine: they run in the browser, so the
-runtime scripts and their compiled modules are exported with the pages. Everything else is
-reported as skipped rather than exported broken.
+Only pages that work without a server can be exported: no sign-in requirement and no server
+events, and path parameters only with the values to write (``@app.page(path, paths=[...])``).
+Client components are fine: they run in the browser, so the runtime scripts and their compiled
+modules are exported with the pages. Everything else is reported as skipped rather than exported
+broken.
 """
 
 from __future__ import annotations
@@ -39,11 +41,16 @@ class ExportReport:
     skipped: list[tuple[str, str]] = field(default_factory=list)
 
 
-async def export_site(app: App, out: str | Path, *, base_path: str = "") -> ExportReport:
+async def export_site(
+    app: App, out: str | Path, *, base_path: str = "", relative: bool = False, not_found: bool = True
+) -> ExportReport:
     """Write the static pages and assets of ``app`` under ``out``.
 
     ``base_path`` is the URL prefix the site will be served under (``"/my-repo"`` for a GitHub
     Pages project site); it prefixes every asset link, exactly like ``--root-path`` does when serving.
+    ``relative=True`` links each page's assets relative to that page instead (``../_rational/...``),
+    so the site also works opened from disk or under any prefix; the 404 page, shown at any URL,
+    still uses ``base_path``. ``not_found=False`` writes no ``404.html``.
     """
     root = Path(out)
     base = base_path.rstrip("/")
@@ -55,26 +62,30 @@ async def export_site(app: App, out: str | Path, *, base_path: str = "") -> Expo
         async with app.fastapi.router.lifespan_context(app.fastapi):
             for route in app.routes.values():
                 name = route.page.__name__
-                if "{" in route.path:
-                    report.skipped.append((route.path, f"{name} has path parameters"))
-                    continue
                 if (route.auth or "") == "required":
                     report.skipped.append((route.path, f"{name} requires sign-in"))
                     continue
-                status, body = await _get(app, route.path, base)
-                if status != 200:
-                    report.skipped.append((route.path, f"{name} answered HTTP {status}"))
-                    continue
-                if _needs_server(body):
-                    report.skipped.append((route.path, f"{name} has server events and needs a live server"))
-                    continue
-                _write(root, _page_file(route.path), body)
-                report.pages.append(route.path)
-                scripts = scripts or RUNTIME_PATH in body
+                urls = route.urls()
+                if not urls:
+                    report.skipped.append((route.path, f"{name} has path parameters: list their values with paths="))
+                for url in urls:
+                    file = _page_file(url)
+                    status, body = await _get(app, url, _relative_base(file) if relative else base)
+                    if status != 200:
+                        report.skipped.append((url, f"{name} answered HTTP {status}"))
+                        continue
+                    if _needs_server(body):
+                        report.skipped.append((url, f"{name} has server events and needs a live server"))
+                        continue
+                    _write(root, file, body)
+                    report.pages.append(url)
+                    scripts = scripts or RUNTIME_PATH in body
 
-            if report.pages:
+            if report.pages and app.theme_href:
                 _write(root, "_rational/theme.css", app.theme_css.encode())
                 report.assets.append("/_rational/theme.css")
+            own_404 = any(_page_file(url) == "404.html" for url in report.pages)  # the site's own 404 page wins
+            if report.pages and not_found and not own_404:
                 status, body = await _get(app, "/__rational_not_found__", base)
                 if status == 404 and b"<html" in body:
                     _write(root, "404.html", body)
@@ -102,7 +113,17 @@ def _needs_server(body: bytes) -> bool:
 
 
 def _page_file(path: str) -> str:
+    """``/about`` is written as ``about/index.html``; a route that names its file, like
+    ``/docs/faq.html``, keeps that name, so an exported site can keep existing URLs."""
+    if path.endswith(".html"):
+        return path.lstrip("/")
     return f"{path.strip('/')}/index.html".lstrip("/")
+
+
+def _relative_base(file: str) -> str:
+    """The way from a page file back to the site root: ``"."``, ``".."``, ``"../.."``, ..."""
+    depth = file.count("/")
+    return "/".join([".."] * depth) if depth else "."
 
 
 def _write(root: Path, relative: str, content: bytes) -> None:

@@ -6,7 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Static sites that already exist can be rebuilt exactly: routes ending in `.html` export under
+  that name; `@app.page(path, paths=[...])` exports one page per path-parameter value;
+  `export_site(relative=True)` / `--relative` links assets relative to each page;
+  `not_found=False` / `--no-404` skips the 404 page (a page at `/404.html` replaces it);
+  `App(theme=None)` drops the theme stylesheet; `App(favicon=False)` writes no icon link.
+- `Page.lang`, `Page.dir`, `Page.favicon`, `Page.head_start` and `Page.head_end`, settable on the
+  class or in `mount()`.
+
 ### Changed
+- `Page.title` and `Page.description` can be set in `mount()` (they are no longer class variables).
+- Pages without the browser runtime have no `<style>` element unless they use styles, and no
+  `data-rw-c` attributes; with `theme=None`, `<html>` has no `data-theme`.
 - Releases no longer install a browser: the browser tests run in CI on the same commit, and the
   Playwright install depends on an Ubuntu package mirror that can stall for many minutes.
 

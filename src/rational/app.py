@@ -12,7 +12,7 @@ import traceback
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from importlib import resources
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.exception_handlers import http_exception_handler
@@ -30,7 +30,7 @@ from .dev import error_page as dev_error_page
 from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddleware, base_path
 from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
-from .pages import PageRoute, error_page
+from .pages import PageRoute, PathValues, error_page
 from .protocol import EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
 from .resume import PageResumer
 from .router import Router
@@ -73,7 +73,7 @@ class App:
         title: str = "Rational App",
         description: str | None = None,
         version: str = "0.1.0",
-        theme: str | Theme = "modern",
+        theme: str | Theme | None = "modern",
         theme_mode: ThemeMode = "system",
         lang: str = "en",
         database: str | Database | None = None,
@@ -83,7 +83,7 @@ class App:
         debug: bool | None = None,
         api_prefix: str = "/api",
         api_docs: bool = True,
-        favicon: str | None = None,
+        favicon: str | Literal[False] | None = None,
         secure_cookies: bool | None = None,
         csp: bool = False,
         session_store: SessionBackend | None = None,
@@ -134,7 +134,8 @@ class App:
         self.live_session = live_session
         self.title = title
         self.api_docs = api_docs
-        self.theme = get_theme(theme)
+        # None: no theme or reset stylesheet at all, for sites that bring their own CSS.
+        self.theme = get_theme(theme) if theme is not None else None
         self.theme_mode = theme_mode
         self.lang = lang
         self.login_path = login_path
@@ -150,7 +151,7 @@ class App:
         self.max_event_bytes = max_event_bytes
         self.logging = Logging()
 
-        self.compiler = StyleCompiler(self.theme, breakpoints, containers)
+        self.compiler = StyleCompiler(self.theme or get_theme("modern"), breakpoints, containers)
         self.sessions: SessionBackend = SessionStore(ttl=session_ttl) if session_store is None else session_store
         self.bus = bus
         self._following = False
@@ -177,10 +178,10 @@ class App:
             database = Database(database)
         self.db: Database | None = database
 
-        self.theme_css = self.theme.css(theme_mode)
+        self.theme_css = self.theme.css(theme_mode) if self.theme is not None else ""
         if view_transitions:  # animated page changes: full loads (supporting browsers) and client navigation
             self.theme_css += "@view-transition{navigation:auto}"
-        self.theme_href = f"/_rational/theme.css?v={_digest(self.theme_css)}"
+        self.theme_href: str | None = f"/_rational/theme.css?v={_digest(self.theme_css)}" if self.theme_css else None
         static = resources.files("rational").joinpath("static")
         self.runtime_js = static.joinpath("runtime.js").read_text("utf-8")
         self.islands_js = static.joinpath("islands.js").read_text("utf-8")
@@ -227,15 +228,26 @@ class App:
 
     # -- registration ------------------------------------------------------------------
 
-    def page(self, path: str, *, title: str | None = None, auth: str | None = None) -> Callable[[P], P]:
-        """Register a ``Page`` subclass at ``path``. ``{name}`` segments become typed props."""
+    def page(
+        self,
+        path: str,
+        *,
+        title: str | None = None,
+        auth: str | None = None,
+        paths: PathValues | Callable[[], PathValues] | None = None,
+    ) -> Callable[[P], P]:
+        """Register a ``Page`` subclass at ``path``. ``{name}`` segments become typed props.
+
+        ``paths`` lists the parameter values a static export writes, one page each, such as
+        ``[{"slug": "faq"}, {"slug": "install"}]``; or a function returning them.
+        """
         if self.api_only:
             raise TypeError("this App is api_only=True and serves no pages; remove api_only or use @app.service")
 
         def decorator(cls: P) -> P:
             if not (isinstance(cls, type) and issubclass(cls, Page)):
                 raise TypeError("@app.page decorates Page subclasses")
-            route = PageRoute(self, path, cls, title, auth)
+            route = PageRoute(self, path, cls, title, auth, paths)
 
             async def endpoint(request: Request) -> Response:
                 return await route(request)
@@ -290,7 +302,7 @@ class App:
     def include(self, router: Router) -> None:
         """Register everything a :class:`~rational.Router` recorded: pages, services and startup hooks."""
         for entry in router.pages:
-            self.page(entry.path, title=entry.title, auth=entry.auth)(entry.page)
+            self.page(entry.path, title=entry.title, auth=entry.auth, paths=entry.paths)(entry.page)
         for service in router.services:
             self.service(service)
         for hook in router.startup:
@@ -434,6 +446,8 @@ class App:
             await self.sessions.save(session)
 
     def data_theme(self, request: Request) -> str | None:
+        if self.theme is None:
+            return None
         chosen = request.cookies.get(THEME_COOKIE)
         if chosen in ("light", "dark"):
             return chosen

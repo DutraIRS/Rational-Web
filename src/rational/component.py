@@ -7,7 +7,7 @@ import copy
 import itertools
 import sys
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar
 
 from ._tracking import changed
 from .events import ClientOp
@@ -59,6 +59,7 @@ class Component:
     _rw_watchers: ClassVar[dict[str, list[str]]] = {}
     _rw_client: ClassVar[bool] = False  # True for ClientComponent: rendered and run in the browser
     resumable: ClassVar[bool] = True  # False: this component's state is not saved in page snapshots
+    _rw_reserved: ClassVar[frozenset[str]] = frozenset()  # annotated attributes that are never props
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -69,7 +70,7 @@ class Component:
             if base is not object:
                 class_vars.update(n for n, a in _own_annotations(base).items() if "ClassVar" in a)
         for name, annotation in _own_annotations(cls).items():
-            if name.startswith("_") or "ClassVar" in annotation or name in class_vars:
+            if name.startswith("_") or "ClassVar" in annotation or name in class_vars or name in cls._rw_reserved:
                 continue
             default = cls.__dict__.get(name, _REQUIRED)
             if isinstance(default, State) or annotation.startswith("State"):
@@ -210,9 +211,18 @@ class Page(Component):
     One instance exists per page view; it is the root of that view's component tree.
     """
 
-    title: ClassVar[str | None] = None
-    description: ClassVar[str | None] = None
     auth: ClassVar[str | None] = None
+    _rw_reserved = frozenset({"title", "description", "lang", "dir", "favicon", "head_start", "head_end"})
+
+    # The HTML document around the page: set these on the class, or in ``mount()`` from the
+    # page's data (one class serving many pages, like ``/{lang}/docs/{slug}.html``).
+    title: str | None = None
+    description: str | None = None
+    lang: str | None = None  # <html lang>; default: the request's locale
+    dir: Literal["ltr", "rtl", "auto"] | None = None  # <html dir>: "rtl" for Arabic, Hebrew, Persian, Urdu
+    favicon: str | Literal[False] | None = None  # None: App(favicon=...); False: no icon link at all
+    head_start: str = ""  # trusted markup right after <meta charset>: a CSP <meta>, early metas
+    head_end: str = ""  # trusted markup closing <head>, after Rational's and the app's stylesheets
 
     @property
     def request(self) -> Any:

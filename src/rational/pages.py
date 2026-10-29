@@ -7,7 +7,8 @@ import re
 import secrets
 import time
 import typing
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
@@ -23,6 +24,7 @@ from .errors import RationalError, Redirect
 from .http import base_path, request_target, security_headers
 from .protocol import EVENT_PATH, PROTOCOL_VERSION, STREAM_PATH, WS_PATH
 from .rendering.html import escape_text, to_html
+from .rendering.nodes import Node
 from .runtime import PageRuntime
 from .styling.compiler import StyleSheet
 
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
     from .app import App
 
 PATH_PARAM = re.compile(r"{(\w+)(?::\w+)?}")
+
+PathValues = Iterable[Mapping[str, Any]]
 
 
 @dataclass
@@ -41,6 +45,7 @@ class PageRoute:
     page: type[Page]
     title: str | None = None
     auth: str | None = None
+    paths: PathValues | Callable[[], PathValues] | None = None  # parameter values to export
     adapters: dict[str, TypeAdapter[Any]] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -57,6 +62,20 @@ class PageRoute:
 
     def url(self, **params: Any) -> str:
         return PATH_PARAM.sub(lambda m: str(params[m.group(1)]), self.path)
+
+    def urls(self) -> list[str]:
+        """Every URL to export: the path itself, or one per entry of ``paths``."""
+        if not self.adapters:
+            return [self.path]
+        values = self.paths() if callable(self.paths) else self.paths or ()
+        urls = []
+        for params in values:
+            if set(params) != set(self.adapters):
+                raise ValueError(
+                    f"{self.path}: paths entries need exactly {sorted(self.adapters)}, got {sorted(params)}"
+                )
+            urls.append(self.url(**params))
+        return urls
 
     def props_from(self, params: dict[str, Any]) -> dict[str, Any]:
         return {name: a.validate_python(params[name]) for name, a in self.adapters.items()}
@@ -166,23 +185,36 @@ class PageRoute:
         runtime.sheet.drain()
         nonce = secrets.token_urlsafe(16) if app.csp else None
         html = render_document(
-            body=to_html(root),
+            body=to_html(root if manifest else _without_component_ids(root)),
             title=page.title or self.title or app.title,
             description=page.description,
-            lang=ctx.locale,
-            theme_href=base + app.theme_href,
+            lang=page.lang or ctx.locale,
+            theme_href=base + app.theme_href if app.theme_href else None,
             page_css=runtime.sheet.css(),
             data_theme=app.data_theme(request),
             manifest=manifest,
             runtime_src=base + app.runtime_src,
             nonce=nonce,
-            favicon=app.favicon,
-            head_extra=app.head_extra(nonce, base),
+            favicon=app.favicon if page.favicon is None else page.favicon,
+            head_start=page.head_start,
+            head_extra=app.head_extra(nonce, base) + page.head_end,
             scripts=scripts,
+            dir=page.dir,
         )
         response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
         security_headers(response, nonce, style_origins=app.style_origins, script_origins=app.script_origins)
         return await finish(response)
+
+
+def _without_component_ids(node: Any) -> Any:
+    """Component markers are for the browser runtime; a page without it is plain HTML."""
+    if not isinstance(node, Node):
+        return node
+    return replace(
+        node,
+        attrs=tuple(a for a in node.attrs if a[0] != "data-rw-c"),
+        children=tuple(_without_component_ids(c) for c in node.children),
+    )
 
 
 def error_page(app: App, request: Request, status: int, message: str) -> HTMLResponse:
@@ -197,7 +229,7 @@ def error_page(app: App, request: Request, status: int, message: str) -> HTMLRes
         body=body,
         title=f"{status} · {app.title}",
         lang=app.lang,
-        theme_href=base_path(request) + app.theme_href,
+        theme_href=base_path(request) + app.theme_href if app.theme_href else None,
         page_css="",
         data_theme=app.data_theme(request),
         nonce=nonce,
