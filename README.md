@@ -239,7 +239,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Sign in with Apple (form-post callback, signed client secret)
 - [x] Stripe: Checkout, customer portal and signed webhooks, without the SDK
 - [x] Error hook (`app.on_error`) for Sentry and similar, covering pages, events, `@remote` and jobs
-- [ ] Secret-key rotation: sign with the newest key, accept the older ones
+- [x] Secret-key rotation: sign with the newest key, accept the older ones
 - [ ] Per-page HTTP control: status codes, `Cache-Control`, `ETag`
 - [ ] CSRF tokens for client components on cached, session-less pages
 - [ ] Page state kept in the URL query (search pages), restored with snapshots

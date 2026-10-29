@@ -105,11 +105,15 @@ class Cookies:
                     path=c.path,
                 )
 
+    def _old(self) -> tuple[str, ...]:
+        app = self._context.app
+        return app._old_secret_keys if app is not None else ()
+
     def _signer(self) -> Signer:
-        return Signer(self._secret(), salt="rational.cookie")
+        return Signer(self._secret(), salt="rational.cookie", extra_secrets=self._old())
 
     def _box(self) -> Box:
-        return Box(self._secret(), salt="rational.cookie")
+        return Box(self._secret(), salt="rational.cookie", extra_secrets=self._old())
 
     def _secret(self) -> str:
         app = self._context.app

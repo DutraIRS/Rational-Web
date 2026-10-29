@@ -21,6 +21,9 @@ All notable changes to this project are documented here. The format follows
   exceptions of pages, event handlers, `@remote` methods and jobs, with the kind, request and
   per-kind detail (handler, service/method, job and attempt). Exceptions raised by a hook are
   logged and discarded, so reporting can never break error handling.
+- Secret-key rotation: `App(secret_key=..., old_secret_keys=[...])` signs cookies and tokens with
+  the newest key while the older ones still verify, so a key change logs nobody out.
+  `Signer`, `Box` and `Tokens` take `extra_secrets=` for the same behaviour anywhere.
 
 ## [0.3.0a1] - 2026-10-29
 

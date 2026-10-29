@@ -111,6 +111,7 @@ class App:
         bus: Bus | None = None,
         i18n: I18n | None = None,
         secret_key: str | None = None,
+        old_secret_keys: Sequence[str] = (),
         adapter: Adapter | None = None,
         stylesheets: Sequence[str | Asset] = (),
         scripts: Sequence[str | Asset] = (),
@@ -126,6 +127,7 @@ class App:
         self.websocket = websocket and not api_only
         self.i18n = i18n
         self._secret_key = secret_key or os.environ.get("RATIONAL_SECRET_KEY")
+        self._old_secret_keys = tuple(old_secret_keys)
         if adapter is not None and adapter.needs_inline_styles and csp:
             raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
         self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
