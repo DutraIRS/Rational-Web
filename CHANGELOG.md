@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0a1] - 2026-10-29
+
+Production batteries: background jobs, email, account emails, SEO, bot protection and sign-in
+with other providers, plus static export for existing sites.
+
 ### Added
 - Static sites that already exist can be rebuilt exactly: routes ending in `.html` export under
   that name; `@app.page(path, paths=[...])` exports one page per path-parameter value;
