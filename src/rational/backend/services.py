@@ -147,6 +147,7 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
             try:
                 if spec.auth == "required" and ctx.user is None:
                     raise Unauthorized()
+                await app.limiter.check(fn, ctx)
                 result = await invoke(
                     getattr(cls(ctx), name),
                     kwargs=kwargs,

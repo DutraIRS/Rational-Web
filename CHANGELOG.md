@@ -28,8 +28,14 @@ All notable changes to this project are documented here. The format follows
   `/sitemap.xml` (with `paths=` routes) and `/robots.txt`; a static export writes both. Pages gain
   `image`, `canonical`, `noindex`, `alternates` and `structured_data`; a `{lang}` path parameter
   sets the page's language.
+- Bot protection (`rational.bots`): `@limit("5/minute", per=...)` for pages, event handlers and
+  `@remote` methods (HTTP 429, memory or Redis counters); `HumanCheck()` + `@human` for forms
+  (honeypot, signed timing); `Captcha(app, "turnstile" | "hcaptcha" | "recaptcha", ...)` with
+  server-side verification and CSP `frame-src`. `TestClient.submit` sends hidden fields like a
+  browser; `PageView.click` takes `check=`.
 
 ### Changed
+- `MemorySessionDriver` drops expired keys as it goes, not only when they are read again.
 - `Page.title` and `Page.description` can be set in `mount()` (they are no longer class variables).
 - Pages without the browser runtime have no `<style>` element unless they use styles, and no
   `data-rw-c` attributes; with `theme=None`, `<html>` has no `data-theme`.

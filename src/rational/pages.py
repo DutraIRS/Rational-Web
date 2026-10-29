@@ -106,6 +106,10 @@ class PageRoute:
             page = self.build(request.path_params)
         except ValidationError:
             return await finish(error_page(app, request, 404, "Page not found"))
+        try:
+            await app.limiter.check(self.page, ctx)
+        except RationalError as e:
+            return await finish(error_page(app, request, e.status, e.message))
         if self.auth == "required" and ctx.user is None:
             if app.login_path:
                 login = f"{base}{app.login_path}?{urlencode({'next': request_target(request)}, safe='/')}"
@@ -211,7 +215,13 @@ class PageRoute:
             dir=page.dir,
         )
         response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
-        security_headers(response, nonce, style_origins=app.style_origins, script_origins=app.script_origins)
+        security_headers(
+            response,
+            nonce,
+            style_origins=app.style_origins,
+            script_origins=app.script_origins,
+            frame_origins=app.frame_origins,
+        )
         return await finish(response)
 
 
@@ -252,5 +262,6 @@ def error_page(app: App, request: Request, status: int, message: str) -> HTMLRes
         inline_styles=True,
         style_origins=app.style_origins,
         script_origins=app.script_origins,
+        frame_origins=app.frame_origins,
     )
     return response

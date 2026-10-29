@@ -170,6 +170,48 @@ room on every worker when the app has a bus (``App(bus=RedisBus(...))``). Raisin
 
 Pages do not need sockets to stay live: server push for pages is built in (see :doc:`concurrency`).
 
+Keeping bots out
+----------------
+
+Three tools from :mod:`rational.bots`, from least to most friction for people:
+
+**Rate limits.** ``@limit("5/minute")`` caps how often one client may call an event handler, a
+``@remote`` method or load a page (on the ``Page`` class). Past the limit the caller gets HTTP 429
+with ``retry_after``. ``per="ip"`` (default), ``"user"`` (the signed-in user, else the IP) or
+``"session"``. Rates read ``"100/hour"`` or ``"10/15 minutes"``. Counts live in memory; on several
+workers, share them: ``app.limiter = Limiter(RedisSessionDriver(url=...))``.
+
+**Form checks.** Put :class:`~rational.bots.HumanCheck` in a form and ``@human`` on its submit
+handler::
+
+    from rational.bots import HumanCheck, human, limit
+
+    class Signup(Component):
+        @human
+        @limit("10/hour")
+        async def create(self, form: SignupForm):
+            ...
+
+        def render(self):
+            return Form(Input("Email", name="email"), HumanCheck(),
+                        Button("Sign up", type="submit"), on_submit=self.create)
+
+``HumanCheck`` adds a field people never see but form-filling bots do, and the signed time the
+form was shown. ``@human`` refuses a submit that fills the trap, comes faster than
+``app.min_form_seconds`` (2 s) or lacks the fields; the handler never sees them.
+
+**CAPTCHA.** For forms under real attack, add a challenge to every ``HumanCheck``::
+
+    from rational.bots import Captcha
+
+    Captcha(app, "turnstile", site_key=SITE_KEY, secret=SECRET_KEY)   # or "hcaptcha", "recaptcha"
+
+Cloudflare Turnstile is free and asks most people nothing. The widget's script and frames are
+added to the pages and to the Content-Security-Policy, and ``@human`` checks the answer with the
+provider before the handler runs; a missing or wrong answer is shown under the form as a
+``captcha`` field error. Widgets render when the page loads, so keep a CAPTCHA form on a page of
+its own rather than revealing it later.
+
 Search engines and link previews
 --------------------------------
 

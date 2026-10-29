@@ -124,6 +124,9 @@ Jobs and email
 .. automodule:: rational.seo
    :members: Seo, structured
 
+.. automodule:: rational.bots
+   :members: limit, Limiter, human, HumanCheck, Captcha, TooManyRequests, NotHuman
+
 Errors and redirects
 --------------------
 

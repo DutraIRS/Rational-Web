@@ -82,6 +82,14 @@ class MemorySessionDriver:
 
     def __init__(self) -> None:
         self._items: dict[str, tuple[float, bytes]] = {}
+        self._writes = 0
+
+    def _sweep(self) -> None:
+        """Drop expired items now and then, so keys that are never read again do not pile up."""
+        self._writes += 1
+        if self._writes % 1000 == 0:
+            now = time.monotonic()
+            self._items = {k: v for k, v in self._items.items() if v[0] >= now}
 
     async def get(self, key: str) -> bytes | None:
         entry = self._items.get(key)
@@ -93,11 +101,13 @@ class MemorySessionDriver:
         return entry[1]
 
     async def set(self, key: str, value: bytes, ttl: int) -> None:
+        self._sweep()
         self._items[key] = (time.monotonic() + ttl, value)
 
     async def cas(self, key: str, expected: bytes | None, value: bytes, ttl: int) -> bool:
         if await self.get(key) != expected:
             return False
+        self._sweep()
         self._items[key] = (time.monotonic() + ttl, value)
         return True
 

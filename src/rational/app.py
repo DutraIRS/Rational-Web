@@ -22,6 +22,7 @@ from starlette.types import Receive, Scope, Send
 
 from .apidocs import swagger_html
 from .assets import Adapter, Asset, as_asset, render_assets
+from .bots import Limiter
 from .component import Page
 from .concurrency import SyncHandlers
 from .context import Context
@@ -43,6 +44,7 @@ from .styling.theme import Theme, ThemeMode, get_theme
 
 if TYPE_CHECKING:
     from .backend.database import Database
+    from .bots import Captcha
     from .bus import Bus
     from .client.compiler import ClientModule
     from .seo import Seo
@@ -163,6 +165,11 @@ class App:
         self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
         self.routes: dict[str, PageRoute] = {}  # by route path
         self.seo: Seo | None = None  # set by rational.seo.Seo
+        self.captcha: Captcha | None = None  # set by rational.bots.Captcha
+        self.limiter = Limiter()  # counts @limit calls; Limiter(RedisSessionDriver(...)) across workers
+        self.min_form_seconds = 2.0  # @human: a person takes at least this long to fill in a form
+        self.frame_origins: list[str] = []  # Content-Security-Policy frame-src (a CAPTCHA widget, say)
+        self.extra_script_origins: list[str] = []  # script origins beyond the app's script assets
         self.exported_files: list[str] = []  # extra paths a static export writes (sitemap.xml, ...)
         self._routes_by_class: dict[type[Page], list[PageRoute]] = {}
         self.resume: PageResumer | None = (
@@ -536,7 +543,7 @@ class App:
 
     @property
     def script_origins(self) -> list[str]:
-        return sorted({a.origin for a in self.scripts if a.origin})
+        return sorted({a.origin for a in self.scripts if a.origin} | set(self.extra_script_origins))
 
     def dev_head(self, nonce: str | None, base: str = "") -> str:
         """The live-reload/error-overlay script tag, in debug mode only."""
