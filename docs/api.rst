@@ -118,6 +118,9 @@ Jobs and email
 .. automodule:: rational.mail
    :members: Mailer, Email, SMTP, Resend, Postmark, Console, Memory, html_to_text, render_email
 
+.. automodule:: rational.accounts
+   :members: Accounts
+
 Errors and redirects
 --------------------
 

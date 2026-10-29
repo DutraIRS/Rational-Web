@@ -20,6 +20,9 @@ All notable changes to this project are documented here. The format follows
 - Email (`rational.mail`): `Mailer` sends components as HTML email with inline styles and a
   plain-text version, through `SMTP`, `Resend` or `Postmark` (`Console` and `Memory` for
   development and tests), now or in the background through jobs.
+- Account emails (`rational.accounts`): subclass `Accounts` with four lookups to get password
+  reset (single-use links), email verification and one-time sign-in links, with no account
+  discovery and at most one message per address a minute. `Mailer` also sends element trees.
 
 ### Changed
 - `Page.title` and `Page.description` can be set in `mount()` (they are no longer class variables).

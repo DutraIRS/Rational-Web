@@ -199,14 +199,17 @@ class Mailer:
         self,
         to: str | Sequence[str],
         subject: str,
-        body: Component | str,
+        body: Component | Node | str,
         *,
         text: str | None = None,
         cc: Sequence[str] = (),
         bcc: Sequence[str] = (),
         reply_to: str | None = None,
     ) -> None:
-        """Send ``body`` (a component, or trusted HTML) to ``to``. ``text`` overrides the plain-text version."""
+        """Send ``body`` (a component, an element tree or trusted HTML) to ``to``.
+
+        ``text`` replaces the plain-text version made from the HTML.
+        """
         email = await self.compose(to, subject, body, text=text, cc=cc, bcc=bcc, reply_to=reply_to)
         if self._deliver is not None:
             await self._deliver.enqueue(email.model_dump())
@@ -217,7 +220,7 @@ class Mailer:
         self,
         to: str | Sequence[str],
         subject: str,
-        body: Component | str,
+        body: Component | Node | str,
         *,
         text: str | None = None,
         cc: Sequence[str] = (),
@@ -225,7 +228,7 @@ class Mailer:
         reply_to: str | None = None,
     ) -> Email:
         """The message ``send`` would deliver, without sending it."""
-        html = await render_email(self.app, body, subject) if isinstance(body, Component) else body
+        html = body if isinstance(body, str) else await render_email(self.app, body, subject)
         return Email(
             sender=self.sender,
             to=[to] if isinstance(to, str) else list(to),
@@ -257,14 +260,24 @@ class _InlineSheet(StyleSheet):
 _VAR = re.compile(r"var\(--rw-([a-z0-9-]+)(?:,[^()]*)?\)")
 
 
-async def render_email(app: App, body: Component, subject: str) -> str:
+class _Tree(Component):
+    """Lets a plain element tree (``Column(...)``) render like a component."""
+
+    tree: Any
+
+    def render(self) -> Any:
+        return self.tree
+
+
+async def render_email(app: App, body: Component | Node, subject: str) -> str:
     """``body`` as a complete HTML email, its styles inlined and theme values filled in."""
     from .context import Context
     from .pages import _without_component_ids
     from .runtime import PageRuntime
 
     sheet = _InlineSheet(app.compiler)
-    runtime = PageRuntime(body, Context(app), sheet)  # type: ignore[arg-type]  # any component renders
+    component = body if isinstance(body, Component) else _Tree(tree=body)
+    runtime = PageRuntime(component, Context(app), sheet)  # type: ignore[arg-type]  # any component renders
     tokens: dict[str, str] = {}
     for name, value in re.findall(r"--rw-([a-z0-9-]+):([^;}]+)", (app.theme or get_theme("modern")).css("light")):
         tokens.setdefault(name, value.strip())  # the light values: the first definition of each token

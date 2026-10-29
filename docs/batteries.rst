@@ -27,6 +27,49 @@ authenticator::
         user_id = ctx.session.get("rw.user") if ctx.peek_session() else None
         return await Repository(ctx.db, User).get(user_id) if user_id else None
 
+Password recovery, email verification and sign-in links
+--------------------------------------------------------
+
+:class:`~rational.accounts.Accounts` sends the account emails every site needs. Subclass it with
+the lookups your user model needs; everything else (signed, expiring links, the messages, the
+checks) is done for you::
+
+    from rational.accounts import Accounts
+
+    class ShopAccounts(Accounts):
+        async def find(self, email):                       # the user with this address, or None
+            return (await users.find(User.email == email.lower(), limit=1) or [None])[0]
+
+        async def get(self, user_id):                      # the user with this id, or None
+            return await users.get(int(user_id))
+
+        async def save_password(self, user, password_hash):
+            await users.update(user.id, password=password_hash)
+
+        async def mark_verified(self, user):
+            await users.update(user.id, verified=True)
+
+    accounts = ShopAccounts(app, mailer, base_url="https://shop.example", store=jobs.store)
+
+Then, from your pages and services:
+
+* ``await accounts.send_reset(email)`` emails a link to ``/reset-password?token=...``, where
+  ``await accounts.reset(token, new_password)`` sets the new password. The link is tied to the old
+  password, so it works once, for an hour.
+* ``await accounts.send_verification(user)`` and ``await accounts.verify(token)`` confirm an
+  address (the link stops working if the address changes).
+* ``await accounts.send_sign_in_link(email)`` and ``user = await accounts.sign_in(token)`` sign in
+  without a password: the link works once, for 15 minutes. Follow it with
+  ``session.login(accounts.user_id(user))``.
+
+A bad, expired or used link raises :class:`~rational.security.InvalidToken`; a too-short password
+raises ``FieldError("password", ...)``. The ``send_*`` methods behave the same whether or not the
+address has an account, so they cannot be used to find out who is registered, and send at most one
+message per address and purpose a minute. Give the mailer ``jobs=`` so that sending takes the same
+short time either way, and pass ``store=jobs.store`` when the app runs on several workers.
+Paths, lifetimes and the minimum password length are class attributes; override
+``reset_message``, ``verify_message`` and ``sign_in_message`` to change the wording or translate it.
+
 API clients and JSON Web Tokens
 -------------------------------
 
