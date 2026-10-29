@@ -27,6 +27,32 @@ authenticator::
         user_id = ctx.session.get("rw.user") if ctx.peek_session() else None
         return await Repository(ctx.db, User).get(user_id) if user_id else None
 
+Sign in with Google, GitHub or Microsoft
+----------------------------------------
+
+:class:`~rational.oauth.OAuth` adds sign-in through other providers, ending in ``session.login``::
+
+    from rational.oauth import OAuth, github, google, microsoft
+
+    async def on_login(context, person):        # an OAuthUser: id, email, email_verified, name, ...
+        if not person.email_verified:
+            return None                          # refuse
+        user = await find_or_create_user(person.email, name=person.name)
+        return user.id                           # what session.login stores
+
+    oauth = OAuth(app, base_url="https://shop.example", on_login=on_login)
+    oauth.add(google(client_id=GOOGLE_ID, client_secret=GOOGLE_SECRET))
+    oauth.add(github(client_id=GITHUB_ID, client_secret=GITHUB_SECRET))
+
+    ButtonLink("Sign in with Google", href=oauth.login_url("google", next="/orders"))
+
+Register ``https://shop.example/auth/<provider>/callback`` as the redirect URI with each provider.
+Every sign-in carries a one-time ``state`` kept in the session (so another site cannot complete a
+sign-in for you), a nonce and a PKCE challenge, and the person's identity is fetched from the
+provider over HTTPS. ``next`` only accepts paths on this site. ``microsoft(tenant=...)`` covers
+Microsoft accounts and Entra ID; ``oidc(name, issuer, ...)`` any OpenID Connect provider (Okta,
+Auth0, Keycloak, GitLab, ...). GitHub gives the verified primary email.
+
 Password recovery, email verification and sign-in links
 --------------------------------------------------------
 

@@ -33,6 +33,9 @@ All notable changes to this project are documented here. The format follows
   (honeypot, signed timing); `Captcha(app, "turnstile" | "hcaptcha" | "recaptcha", ...)` with
   server-side verification and CSP `frame-src`. `TestClient.submit` sends hidden fields like a
   browser; `PageView.click` takes `check=`.
+- Sign-in with other providers (`rational.oauth`): `OAuth(app, base_url=..., on_login=...)` with
+  `google`, `github`, `microsoft` and any OpenID Connect `oidc(...)` provider; one-time state,
+  nonce and PKCE, ending in `session.login`.
 
 ### Changed
 - `MemorySessionDriver` drops expired keys as it goes, not only when they are read again.
