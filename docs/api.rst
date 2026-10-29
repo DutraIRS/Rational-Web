@@ -109,6 +109,15 @@ Security, cookies and sockets
 .. autoclass:: rational.backend.database.Repository
    :members:
 
+Jobs and email
+--------------
+
+.. automodule:: rational.jobs
+   :members: Jobs, Job, JobStore, MemoryJobStore, RedisJobStore
+
+.. automodule:: rational.mail
+   :members: Mailer, Email, SMTP, Resend, Postmark, Console, Memory, html_to_text, render_email
+
 Errors and redirects
 --------------------
 

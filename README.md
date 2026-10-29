@@ -226,8 +226,8 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 **0.5: production batteries**
 - [x] Static sites that keep existing URLs and markup: `.html` routes, `paths=` for parameter
       routes, relative export, per-page `lang`/`dir`/head markup, `theme=None`
-- [ ] Email: `Mailer` (SMTP, HTTP providers), emails written as components, captured in tests
-- [ ] Background jobs and scheduled tasks with retries
+- [x] Email: `Mailer` (SMTP, HTTP providers), emails written as components, captured in tests
+- [x] Background jobs and scheduled tasks with retries
 - [ ] Password recovery, email verification and magic-link sign-in
 - [ ] SEO: `sitemap.xml`, `robots.txt`, canonical URLs, Open Graph, JSON-LD, `hreflang`
 - [ ] Bot protection: honeypot, form timing, rate limits for pages and `@remote` methods

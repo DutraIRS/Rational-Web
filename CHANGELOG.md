@@ -14,6 +14,12 @@ All notable changes to this project are documented here. The format follows
   `App(theme=None)` drops the theme stylesheet; `App(favicon=False)` writes no icon link.
 - `Page.lang`, `Page.dir`, `Page.favicon`, `Page.head_start` and `Page.head_end`, settable on the
   class or in `mount()`.
+- Background jobs (`rational.jobs`): `@jobs.job(retries=...)`, `enqueue`, `enqueue_in`,
+  `@jobs.every(...)` schedules that run once per interval across workers; in memory or in Redis
+  (`RedisJobStore`), at-least-once with leases.
+- Email (`rational.mail`): `Mailer` sends components as HTML email with inline styles and a
+  plain-text version, through `SMTP`, `Resend` or `Postmark` (`Console` and `Memory` for
+  development and tests), now or in the background through jobs.
 
 ### Changed
 - `Page.title` and `Page.description` can be set in `mount()` (they are no longer class variables).

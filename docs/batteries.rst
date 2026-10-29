@@ -126,3 +126,62 @@ room on every worker when the app has a bus (``App(bus=RedisBus(...))``). Raisin
 ``RemoteError`` in ``receive`` sends ``{"error": ...}`` back to that connection.
 
 Pages do not need sockets to stay live: server push for pages is built in (see :doc:`concurrency`).
+
+Background jobs
+---------------
+
+Work that should not hold up a request (emails, reports, calls to slow services) goes to a job.
+:class:`~rational.jobs.Jobs` runs them on workers inside the app's processes, retrying failures
+with growing delays::
+
+    from rational.jobs import Jobs, RedisJobStore
+
+    jobs = Jobs(app)                          # in memory: lost on restart, one process
+    jobs = Jobs(app, store=RedisJobStore(url="redis://localhost:6379/0"))  # shared, kept
+
+    @jobs.job(retries=5)
+    async def send_receipt(order_id: int) -> None:
+        ...
+
+    await send_receipt.enqueue(42)            # returns at once
+    await send_receipt.enqueue_in(3600, 42)   # in an hour
+
+    @jobs.every(hours=24)                     # once a day (midnight UTC), on one worker
+    async def purge_old_carts() -> None:
+        ...
+
+Arguments are stored as JSON (numbers, strings, lists, dicts, Pydantic models) and validated
+against the function's annotations when the job runs; wrong arguments fail at ``enqueue``.
+A plain ``def`` job runs in a worker thread. Delivery is *at least once*: a job cut off by a crash
+or a deploy runs again after its lease (5 minutes by default), so a job should be safe to run
+twice. In tests, ``await jobs.run_pending()`` runs everything that is due, right away.
+
+Email
+-----
+
+:class:`~rational.mail.Mailer` sends messages written as components, through SMTP or an email
+API::
+
+    from rational.mail import SMTP, Mailer
+
+    mailer = Mailer(app, SMTP("smtp.example.com", username=USER, password=PASSWORD),
+                    sender="Shop <hello@shop.example>", jobs=jobs)
+
+    class Receipt(Component):
+        order: Order
+
+        def render(self):
+            return Column(Heading("Thanks for your order"), Text(f"Total: {self.order.total}"), gap="md")
+
+    await mailer.send(customer.email, "Your receipt", Receipt(order=order))
+
+* Email clients ignore stylesheets and CSS variables, so each element's ``Style`` is written into
+  its ``style`` attribute with the theme's (light) colors and sizes filled in. Hover and
+  responsive variants are left out. A string body is sent as it is (trusted HTML).
+* A plain-text version is made from the HTML (paragraphs, lists, link addresses), or pass ``text=``.
+* Backends: ``SMTP`` (``security="starttls"``, ``"tls"`` or ``"none"``), ``Resend(api_key)``,
+  ``Postmark(server_token)``; ``Console()`` logs messages instead of sending them (development)
+  and ``Memory()`` keeps them in ``.outbox`` (tests).
+* With ``jobs=``, ``send`` queues the message and returns; delivery is retried up to five times.
+  Without it, ``send`` waits for the server and raises if it fails.
+* Line breaks in addresses and subjects are refused, so a form value cannot add headers.
