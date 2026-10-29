@@ -223,6 +223,29 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Passwords, JSON Web Tokens, signing and encryption (`rational.security`), app cookies
 - [x] `Repository` for typed CRUD and pagination; `Socket` classes with rooms across workers
 
+**0.5: production batteries**
+- [x] Static sites that keep existing URLs and markup: `.html` routes, `paths=` for parameter
+      routes, relative export, per-page `lang`/`dir`/head markup, `theme=None`
+- [ ] Email: `Mailer` (SMTP, HTTP providers), emails written as components, captured in tests
+- [ ] Background jobs and scheduled tasks with retries
+- [ ] Password recovery, email verification and magic-link sign-in
+- [ ] SEO: `sitemap.xml`, `robots.txt`, canonical URLs, Open Graph, JSON-LD, `hreflang`
+- [ ] Bot protection: honeypot, form timing, rate limits for pages and `@remote` methods
+- [ ] CAPTCHA field: Cloudflare Turnstile, hCaptcha, reCAPTCHA
+- [ ] Sign-in with Google, GitHub, Microsoft and Apple (OpenID Connect / OAuth 2)
+- [ ] Stripe: Checkout, customer portal and signed webhooks, without the SDK
+
+**0.6: more batteries**
+- [ ] File uploads and storage (local, S3), with size and type checks
+- [ ] Admin panel generated from SQLAlchemy models
+- [ ] Two-factor sign-in (TOTP), then passkeys
+- [ ] Roles and permissions
+- [ ] Caching (`@cached`, memory or Redis)
+- [ ] Health checks, Prometheus metrics, error-reporting hook
+- [ ] Content collections: Markdown with front matter as pages
+- [ ] Notifications: in-app, email and web push
+- [ ] Progressive web apps (manifest, offline service worker), then desktop builds and mobile shells
+
 **1.0: stability**
 - [ ] Frozen public API with a deprecation policy
 - [ ] Accessibility audit (a structural a11y suite runs in CI)
@@ -230,9 +253,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [ ] Load tests
 - [ ] Independent security review
 
-Have an idea? Open an issue. The roadmap is a conversation. Longer-term design notes on
-concurrency, cross-tab state, client rendering and serverless deployment live in
-[`ideas/concurrency-and-state.md`](ideas/concurrency-and-state.md).
+Have an idea? Open an issue. The roadmap is a conversation.
 
 ## Contributing
 
