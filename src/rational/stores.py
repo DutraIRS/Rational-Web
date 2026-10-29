@@ -13,6 +13,7 @@ disappeared was ended elsewhere (a logout, or expiry) and is never written back.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -158,6 +159,129 @@ class RedisSessionDriver:
 
     async def delete(self, key: str) -> None:
         await self.client.delete(key)
+
+
+class SQLSessionDriver:
+    """Sessions and page snapshots in a SQL database, through SQLAlchemy (``pip install "rational[db]"``).
+
+    Postgres in production (``postgresql+asyncpg://...``, plus ``pip install asyncpg``); any database
+    SQLAlchemy supports works, SQLite included. Pass a URL or a :class:`~rational.backend.database.Database`.
+    The table is created on first use. Compare-and-swap is a single guarded ``UPDATE``, so it holds
+    across every worker and server.
+    """
+
+    def __init__(self, database: Any, *, table: str = "rational_sessions") -> None:
+        try:
+            from sqlalchemy import Column, Float, LargeBinary, MetaData, String, Table
+        except ImportError as e:
+            raise ImportError("SQLSessionDriver needs SQLAlchemy: pip install 'rational[db]'") from e
+        from .backend.database import Database
+
+        self.db = Database(database) if isinstance(database, str) else database
+        self.table = Table(
+            table,
+            MetaData(),
+            Column("key", String(255), primary_key=True),
+            Column("value", LargeBinary, nullable=False),
+            Column("expires", Float, nullable=False, index=True),
+        )
+        self._ready = False
+        self._setup_lock = asyncio.Lock()
+        self._writes = 0
+
+    async def _setup(self) -> None:
+        if self._ready:
+            return
+        from sqlalchemy import inspect
+        from sqlalchemy.exc import DBAPIError
+
+        async with self._setup_lock:  # first calls in this process create the table once
+            if self._ready:
+                return
+            try:
+                async with self.db.engine.begin() as conn:
+                    await conn.run_sync(self.table.metadata.create_all)  # only if missing
+            except DBAPIError:  # another worker created it a moment ago
+                async with self.db.engine.connect() as conn:
+                    if not await conn.run_sync(lambda c: inspect(c).has_table(self.table.name)):
+                        raise
+            self._ready = True
+
+    async def get(self, key: str) -> bytes | None:
+        from sqlalchemy import select
+
+        await self._setup()
+        t = self.table
+        async with self.db.engine.connect() as conn:
+            row = (await conn.execute(select(t.c.value).where(t.c.key == key, t.c.expires > time.time()))).first()
+        return None if row is None else bytes(row[0])
+
+    async def set(self, key: str, value: bytes, ttl: int) -> None:
+        from sqlalchemy import insert, update
+        from sqlalchemy.exc import IntegrityError
+
+        await self._setup()
+        t, expires = self.table, time.time() + ttl
+        for attempt in range(3):  # a concurrent first write of the same key may win the insert: update then
+            try:
+                async with self.db.engine.begin() as conn:
+                    done = await conn.execute(update(t).where(t.c.key == key).values(value=value, expires=expires))
+                    if done.rowcount == 0:
+                        await conn.execute(insert(t).values(key=key, value=value, expires=expires))
+                break
+            except IntegrityError:
+                if attempt == 2:
+                    raise
+        await self._swept()
+
+    async def cas(self, key: str, expected: bytes | None, value: bytes, ttl: int) -> bool:
+        from sqlalchemy import insert, update
+        from sqlalchemy.exc import IntegrityError
+
+        await self._setup()
+        t, now = self.table, time.time()
+        try:
+            async with self.db.engine.begin() as conn:
+                if expected is None:  # only if absent: take over an expired row, else insert
+                    stale = t.c.expires <= now
+                    done = await conn.execute(
+                        update(t).where(t.c.key == key, stale).values(value=value, expires=now + ttl)
+                    )
+                    if done.rowcount == 0:
+                        await conn.execute(insert(t).values(key=key, value=value, expires=now + ttl))
+                else:
+                    current = update(t).where(t.c.key == key, t.c.value == expected, t.c.expires > now)
+                    swapped = await conn.execute(current.values(value=value, expires=now + ttl))
+                    if swapped.rowcount != 1:
+                        return False
+        except IntegrityError:  # the key exists and is live
+            return False
+        await self._swept()
+        return True
+
+    async def touch(self, key: str, ttl: int) -> None:
+        from sqlalchemy import update
+
+        await self._setup()
+        t, now = self.table, time.time()
+        async with self.db.engine.begin() as conn:
+            await conn.execute(update(t).where(t.c.key == key, t.c.expires > now).values(expires=now + ttl))
+
+    async def delete(self, key: str) -> None:
+        from sqlalchemy import delete
+
+        await self._setup()
+        async with self.db.engine.begin() as conn:
+            await conn.execute(delete(self.table).where(self.table.c.key == key))
+
+    async def _swept(self) -> None:
+        """Delete expired rows now and then; nothing reads them, but they take space."""
+        from sqlalchemy import delete
+
+        self._writes += 1
+        if self._writes % 500 == 0:
+            async with self.db.engine.begin() as conn:
+                await conn.execute(delete(self.table).where(self.table.c.expires <= time.time()))
 
 
 class _Record(NamedTuple):

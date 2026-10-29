@@ -244,7 +244,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] CSRF tokens for client components on cached, session-less pages
 - [x] Page state kept in the URL query (search pages), restored with snapshots
 - [x] Snapshot restore that checks saved state against the deployed components, else reloads cleanly
-- [ ] Postgres session driver
+- [x] Postgres session driver (any SQL database through SQLAlchemy)
 
 **0.6: more batteries**
 - [ ] File uploads and storage (local, S3), with size and type checks

@@ -41,6 +41,10 @@ All notable changes to this project are documented here. The format follows
   its default), for search and filter pages that are shared, bookmarked and resumed.
 - Snapshot restore checks saved state against the deployed components (class, `State` names and
   value types); anything that no longer fits makes the browser reload the page instead.
+- `SQLSessionDriver`: sessions, page snapshots and rate-limit counts in a SQL database through
+  SQLAlchemy (Postgres in production, SQLite in tests), with compare-and-swap as one guarded
+  `UPDATE`. CI now runs the Redis and SQL drivers and the Redis job store against real Postgres
+  and Redis servers.
 
 ## [0.3.0a1] - 2026-10-29
 

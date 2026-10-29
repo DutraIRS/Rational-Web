@@ -92,7 +92,7 @@ Sessions
    :members:
 
 .. automodule:: rational.stores
-   :members: PersistentSessionStore, RedisSessionDriver, MemorySessionDriver, SessionDriver
+   :members: PersistentSessionStore, RedisSessionDriver, SQLSessionDriver, MemorySessionDriver, SessionDriver
 
 Security, cookies and sockets
 -----------------------------

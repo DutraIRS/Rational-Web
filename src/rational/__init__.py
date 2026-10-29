@@ -62,7 +62,7 @@ from .rendering import h, unsafe_html
 from .router import Router
 from .sockets import Socket
 from .state import Binding, State, computed, watch
-from .stores import PersistentSessionStore, RedisSessionDriver
+from .stores import PersistentSessionStore, RedisSessionDriver, SQLSessionDriver
 from .styling import Breakpoint, Style, Theme
 
 try:
@@ -117,6 +117,7 @@ __all__ = [
     "PersistentSessionStore",
     "RedisBus",
     "RedisSessionDriver",
+    "SQLSessionDriver",
     "RemoteError",
     "Router",
     "Row",

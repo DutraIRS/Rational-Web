@@ -37,6 +37,32 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest --ignore=tests/browser --cov
 
+  servers:
+    # The Redis and SQL drivers and the Redis job store against real servers, not fakes.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      RATIONAL_TEST_POSTGRES: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+      RATIONAL_TEST_REDIS: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev]" asyncpg
+      - run: python -m pytest tests/test_session_drivers.py tests/test_jobs.py
+
   quality:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
