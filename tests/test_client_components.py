@@ -82,7 +82,7 @@ def test_the_server_renders_the_first_html():
     assert "Count: 3" in html and "data-rw-on-click" not in html  # no server handler: it runs in the browser
     assert f'src="{app.islands_src}"' in html and f'src="{module.path}"' in html
     assert "page" not in manifest_of(html)  # no server-side view to talk to
-    assert "set-cookie" not in response.headers and response.headers["cache-control"] == "no-store"
+    assert "set-cookie" not in response.headers and response.headers["cache-control"] == "no-cache"  # no token in it
 
 
 def test_compiled_modules_are_served_with_long_caching():

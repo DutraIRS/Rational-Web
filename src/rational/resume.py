@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import Request
 
 from .runtime import PageRuntime
+from .state import class_name
 from .stores import json_plain
 from .styling.compiler import StyleSheet
 
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("rational")
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2  # 2: each component's class is saved with its state
 
 
 def _usable(state: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +70,7 @@ class PageResumer:
                 continue
             state = _usable(comp._rw_state)
             if state:
-                components[comp.path] = state
+                components[comp.path] = {"type": class_name(type(comp)), "state": state}
         return {
             "v": SNAPSHOT_VERSION,
             "route": runtime.origin[0],

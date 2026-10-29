@@ -174,7 +174,8 @@ class Accounts:
     # -- internals ----------------------------------------------------------------------------------
 
     def _signer(self, purpose: str) -> Signer:
-        return Signer(self._secret or self.app.secret_key, salt=f"rational.accounts.{purpose}")
+        salt = f"rational.accounts.{purpose}"
+        return Signer(self._secret, salt=salt) if self._secret else self.app.signer(salt)
 
     @staticmethod
     def _fingerprint(purpose: str, value: str) -> str:  # never the secret itself in a link

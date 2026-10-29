@@ -33,7 +33,7 @@ from .http import base_path
 from .rendering.builder import h, normalize_children
 from .rendering.html import to_html
 from .rendering.nodes import AttrValue, Node, RawHTML, TextNode
-from .state import call_watcher, values_equal
+from .state import call_watcher, restorable, values_equal
 from .styling.compiler import StyleSheet
 from .styling.style import merge
 
@@ -250,8 +250,8 @@ class PageRuntime:
         self.paths[path] = cid
         self.parent[cid] = parent
         saved = self.restore.get(path)
-        if saved:
-            comp._rw_state.update(saved)
+        if saved:  # resuming from a snapshot: only state that still fits this component's code
+            comp._rw_state.update(restorable(comp, saved["type"], saved["state"]))
         result = comp.mount()
         if inspect.isawaitable(result):
             await result

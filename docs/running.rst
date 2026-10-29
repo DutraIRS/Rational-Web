@@ -63,8 +63,16 @@ persistent store and logins, CSRF tokens and API calls work on any worker and su
 
     app = App(session_store=PersistentSessionStore(RedisSessionDriver(url="redis://localhost:6379/0")))
 
-Install the client with ``pip install "rational[redis]"``. Each request reads its session from Redis
-(one round trip) and writes it back only if it changed. A change or logout on one worker is seen by
+Install the client with ``pip install "rational[redis]"``. Already running Postgres and no Redis?
+Keep sessions in the database instead (``pip install "rational[db]" asyncpg``); the table is created
+on first use::
+
+    from rational import SQLSessionDriver
+
+    app = App(session_store=PersistentSessionStore(SQLSessionDriver("postgresql+asyncpg://...")))
+
+Each request reads its session from the store (one round trip) and writes it back only if it
+changed. A change or logout on one worker is seen by
 the others. What is stored is JSON: the CSRF token and ``session.data`` including the signed-in user,
 so keep session values JSON-compatible (or pass ``serialize=`` and ``deserialize=``). It is never
 pickled, because a shared store is a trust boundary. Match ``ttl=`` to ``App(session_ttl=...)``.

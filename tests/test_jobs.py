@@ -1,7 +1,9 @@
 """Background jobs: queueing, validation, retries, leases, schedules, and both stores."""
 
 import asyncio
+import os
 import time
+import uuid
 
 import fakeredis
 import pytest
@@ -10,10 +12,16 @@ from pydantic import BaseModel
 from rational import App
 from rational.jobs import Jobs, MemoryJobStore, RedisJobStore
 
+STORES = ["memory", "redis"] + (["real-redis"] if os.environ.get("RATIONAL_TEST_REDIS") else [])
 
-@pytest.fixture(params=["memory", "redis"])
+
+@pytest.fixture(params=STORES)
 def store(request):
-    return MemoryJobStore() if request.param == "memory" else RedisJobStore(fakeredis.FakeAsyncRedis())
+    if request.param == "memory":
+        return MemoryJobStore()
+    if request.param == "real-redis":  # a fresh prefix, so tests sharing the server never meet
+        return RedisJobStore(url=os.environ["RATIONAL_TEST_REDIS"], prefix=f"test:{uuid.uuid4().hex}")
+    return RedisJobStore(fakeredis.FakeAsyncRedis())
 
 
 class Order(BaseModel):

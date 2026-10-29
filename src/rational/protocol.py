@@ -32,6 +32,7 @@ log = logging.getLogger("rational")
 
 PROTOCOL_VERSION = 1
 EVENT_PATH = "/_rational/event"
+CSRF_PATH = "/_rational/csrf"
 STREAM_PATH = "/_rational/stream"
 WS_PATH = "/_rational/ws"
 STREAM_KEEPALIVE_SECONDS = 15
@@ -119,6 +120,10 @@ async def handle_event(app: App, request: Request) -> Response:
                 error, status = e.to_json(), e.status
             except Exception as e:
                 log.exception("error in event handler %s", event.handler)
+                if app._error_hooks:
+                    from .errors import ErrorInfo
+
+                    await app._run_error_hooks(ErrorInfo(e, "event", request, extra={"handler": event.handler}))
                 error, status = {"code": "internal", "message": "Something went wrong"}, 500
                 if app.debug:
                     error.update(message=f"{type(e).__name__}: {e}", debug=dev.describe(e))

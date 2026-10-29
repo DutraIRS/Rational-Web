@@ -188,7 +188,9 @@ class PageRoute:
                 "transitions": app.view_transitions,
                 "base": base,
                 "api": base + app.api_prefix,
-                "csrf": current.csrf if current is not None else None,
+                # A page the app lets browsers or CDNs cache holds no visitor's token: rational.call
+                # fetches it from CSRF_PATH when a call needs one.
+                "csrf": current.csrf if current is not None and page.cache_control is None else None,
                 "debug": app.debug,
             }
         scripts = [base + app.islands_src, *(base + path for path in runtime.islands)] if runtime.islands else []
@@ -214,7 +216,19 @@ class PageRoute:
             scripts=scripts,
             dir=page.dir,
         )
-        response = HTMLResponse(html, headers={"Cache-Control": "no-store" if manifest else "no-cache"})
+        cache_control = page.cache_control if page.cache_control is not None else "no-cache"
+        if manifest and (manifest.get("page") or manifest.get("csrf")):  # this visitor's id or token
+            cache_control = "no-store"
+        headers = {"Cache-Control": cache_control}
+        if page.etag:
+            etag = page.etag if page.etag.startswith(('"', 'W/"')) else f'"{page.etag}"'  # quoted, as HTTP requires
+            headers["ETag"] = etag
+            weak = etag.removeprefix("W/").strip('"')
+            sent = {tag.removeprefix("W/").strip('"') for tag in request.headers.get("if-none-match", "").split(",")}
+            if weak and weak in sent:
+                not_modified = Response(status_code=304, headers=headers)
+                return await finish(not_modified)
+        response = HTMLResponse(html, status_code=page.status or 200, headers=headers)
         security_headers(
             response,
             nonce,
@@ -222,7 +236,10 @@ class PageRoute:
             script_origins=app.script_origins,
             frame_origins=app.frame_origins,
         )
-        return await finish(response)
+        await finish(response)
+        if "set-cookie" in response.headers and "no-store" not in cache_control:
+            response.headers["Cache-Control"] = "private, no-cache"  # a cookie must not be cached for others
+        return response
 
 
 def _without_component_ids(node: Any) -> Any:

@@ -227,6 +227,12 @@
         else if (/^https?:\/\//i.test(a.url)) location.assign(a.url);  // e.g. a payment provider
       }
       else if (a.op === "reload") location.reload();
+      else if (a.op === "query") {  // State(query=...): keep the URL in step, without a history entry
+        const url = new URL(location.href);
+        if (a.value === null) url.searchParams.delete(a.name);
+        else url.searchParams.set(a.name, a.value);
+        history.replaceState(history.state, "", url);
+      }
       else if (a.op === "stream") { M.stream = M.stream || M.endpoint.replace(/event$/, "stream"); openStream(); }
       else if (a.op === "js") runOps(a.ops, document.body);
     }
@@ -632,13 +638,21 @@
         ? (M.base || "") + options.path
         : `${M.api}/${encodeURIComponent(service)}/${encodeURIComponent(method)}`;
       if (bodyless && args) url += "?" + new URLSearchParams(args);
-      const res = await fetch(url, {
+      const send = () => fetch(url, {
         method: verb,
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json", "X-RW-CSRF": M.csrf },
+        headers: { "Content-Type": "application/json", "X-RW-CSRF": M.csrf || "" },
         body: bodyless ? undefined : JSON.stringify(args || {}),
       });
-      const data = await res.json();
+      let res = await send();
+      let data = await res.json();
+      if (res.status === 403 && data.error?.code === "csrf") {
+        // A cached page holds no visitor's token: fetch it once, then retry (the call never ran).
+        const token = await fetch((M.base || "") + "/_rational/csrf", { credentials: "same-origin" });
+        M.csrf = (await token.json()).csrf;
+        res = await send();
+        data = await res.json();
+      }
       if (!res.ok) throw Object.assign(new Error(data.error?.message || res.statusText), { response: data });
       return data;
     },

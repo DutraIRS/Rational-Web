@@ -166,7 +166,7 @@ class HumanCheck(Component):
 
 def _signer(app: App | None) -> Signer:
     assert app is not None
-    return Signer(app.secret_key, salt="rational.bots.form")
+    return app.signer("rational.bots.form")
 
 
 async def check_submit(handler: Any, context: Context, form: dict[str, Any]) -> None:

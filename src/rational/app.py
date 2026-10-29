@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 
@@ -28,14 +28,16 @@ from .concurrency import SyncHandlers
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
+from .errors import ErrorInfo
 from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddleware, base_path
 from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, PathValues, error_page
-from .protocol import EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
+from .protocol import CSRF_PATH, EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
 from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
+from .security import Signer
 from .session import Session, SessionBackend, SessionStore, TTLStore
 from .sockets import Rooms
 from .styling.compiler import StyleCompiler
@@ -110,6 +112,7 @@ class App:
         bus: Bus | None = None,
         i18n: I18n | None = None,
         secret_key: str | None = None,
+        old_secret_keys: Sequence[str] = (),
         adapter: Adapter | None = None,
         stylesheets: Sequence[str | Asset] = (),
         scripts: Sequence[str | Asset] = (),
@@ -125,6 +128,8 @@ class App:
         self.websocket = websocket and not api_only
         self.i18n = i18n
         self._secret_key = secret_key or os.environ.get("RATIONAL_SECRET_KEY")
+        env_old = os.environ.get("RATIONAL_OLD_SECRET_KEYS", "")  # comma-separated, newest first
+        self._old_secret_keys = tuple(old_secret_keys) or tuple(k for k in env_old.split(",") if k.strip())
         if adapter is not None and adapter.needs_inline_styles and csp:
             raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
         self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
@@ -179,6 +184,7 @@ class App:
         self.authenticator: Callable[[Context], Any] | None = None
         self._startup: list[Callable[[], Any]] = []
         self._shutdown: list[Callable[[], Any]] = []
+        self._error_hooks: list[Callable[[ErrorInfo], Any]] = []
         self._startup_error: BaseException | None = None
         self._requests = 0
 
@@ -220,6 +226,7 @@ class App:
             ("/_rational/islands.js", self._asset(self.islands_js, "text/javascript"), "GET"),
             ("/_rational/c/{name}", self._client_script, "GET"),
             ("/_rational/theme.css", self._asset(self.theme_css, "text/css"), "GET"),
+            (CSRF_PATH, self._csrf, "GET"),
             (EVENT_PATH, self._event, "POST"),
             (STREAM_PATH, self._stream, "GET"),
         ]
@@ -340,6 +347,28 @@ class App:
         self._shutdown.append(fn)
         return fn
 
+    def on_error(self, fn: Callable[[ErrorInfo], Any]) -> Callable[[ErrorInfo], Any]:
+        """Register an error hook (sync or async) for unhandled exceptions.
+
+        Hooks cover pages, event handlers, ``@remote`` methods and jobs, and are how Sentry and
+        similar services plug in. Exceptions raised by a hook are logged and discarded: error
+        hooks must never break error handling.
+        """
+        self._error_hooks.append(fn)
+        return fn
+
+    async def _run_error_hooks(self, info: ErrorInfo) -> None:
+        import contextlib
+
+        for hook in self._error_hooks:
+            try:
+                result = hook(info)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                with contextlib.suppress(Exception):
+                    logging.getLogger("rational").exception("error hook %r failed", getattr(hook, "__name__", hook))
+
     def authenticate(self, fn: Callable[[Context], Any]) -> Callable[[Context], Any]:
         """Replace the default authenticator (``session.user``).
 
@@ -417,6 +446,11 @@ class App:
                 )
             self._secret_key = secrets.token_urlsafe(32)
         return self._secret_key
+
+    def signer(self, salt: str) -> Signer:
+        """A :class:`~rational.security.Signer` for ``salt`` that signs with the current secret key and
+        still accepts values signed with ``old_secret_keys`` (key rotation)."""
+        return Signer(self.secret_key, salt=salt, extra_secrets=self._old_secret_keys)
 
     async def finish(self, request: Request, response: Response, ctx: Context) -> None:
         """Persist session changes (creation, id rotation) and cookies set during the request."""
@@ -518,6 +552,16 @@ class App:
         """Every client component module compiled so far (for static export)."""
         return tuple(self._client_modules.values())
 
+    async def _csrf(self, request: Request) -> Response:
+        """This visitor's CSRF token, for client components on cached pages (which hold none).
+
+        Other sites cannot read it: framework routes send no CORS headers. ``null`` without a
+        session, when no token is needed.
+        """
+        session = await self.load_session(request)
+        token = session.csrf if session is not None else None
+        return JSONResponse({"csrf": token}, headers={"Cache-Control": "no-store"})
+
     async def _client_script(self, name: str) -> Response:
         module = self._client_files.get(name)
         if module is None:
@@ -571,6 +615,7 @@ class App:
 
     async def _server_error(self, request: Request, exc: Exception) -> Response:
         logging.getLogger("rational").exception("unhandled request error", exc_info=(type(exc), exc, exc.__traceback__))
+        await self._run_error_hooks(ErrorInfo(exc, "page", request))
         response = PlainTextResponse("Internal Server Error", status_code=500)
         ctx = getattr(request.state, "rational_context", None)
         if isinstance(ctx, Context):

@@ -5,7 +5,7 @@ Application
 -----------
 
 .. autoclass:: rational.App
-   :members: page, service, include, url_for, on_startup, authenticate, static, run
+   :members: page, service, include, url_for, on_startup, on_error, authenticate, signer, static, run
 
 .. autoclass:: rational.Router
    :members: page, service, on_startup, include
@@ -92,7 +92,7 @@ Sessions
    :members:
 
 .. automodule:: rational.stores
-   :members: PersistentSessionStore, RedisSessionDriver, MemorySessionDriver, SessionDriver
+   :members: PersistentSessionStore, RedisSessionDriver, SQLSessionDriver, MemorySessionDriver, SessionDriver
 
 Security, cookies and sockets
 -----------------------------
@@ -129,6 +129,9 @@ Jobs and email
 
 .. automodule:: rational.bots
    :members: limit, Limiter, human, HumanCheck, Captcha, TooManyRequests, NotHuman
+
+.. automodule:: rational.stripe
+   :members: Stripe, StripeError
 
 Errors and redirects
 --------------------

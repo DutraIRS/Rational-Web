@@ -21,7 +21,7 @@ import hmac
 import json
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -88,23 +88,29 @@ class Signer:
     """Sign values so they cannot be altered (they stay readable). ``max_age`` rejects old ones.
 
     ``salt`` separates purposes: a value signed for one purpose is invalid for another.
+    ``extra_secrets`` are older keys that still verify (secret-key rotation): new values are
+    always signed with ``secret``.
     """
 
-    def __init__(self, secret: str | bytes, *, salt: str = "rational.signer") -> None:
-        self._key = hmac.new(_secret(secret, "Signer"), salt.encode(), hashlib.sha256).digest()
+    def __init__(
+        self, secret: str | bytes, *, salt: str = "rational.signer", extra_secrets: Sequence[str | bytes] = ()
+    ) -> None:
+        self._keys = [
+            hmac.new(_secret(s, "Signer"), salt.encode(), hashlib.sha256).digest() for s in (secret, *extra_secrets)
+        ]
 
-    def _mac(self, payload: bytes) -> str:
-        return _b64(hmac.new(self._key, payload, hashlib.sha256).digest())
+    def _macs(self, payload: bytes) -> list[str]:
+        return [_b64(hmac.new(key, payload, hashlib.sha256).digest()) for key in self._keys]
 
     def sign(self, value: Any) -> str:
         """A URL-safe string carrying ``value`` (any JSON data) and when it was signed."""
         payload = _b64(json.dumps([int(time.time()), value], separators=(",", ":")).encode())
-        return f"{payload}.{self._mac(payload.encode())}"
+        return f"{payload}.{self._macs(payload.encode())[0]}"
 
     def unsign(self, token: str, *, max_age: float | None = None) -> Any:
         """The value, if ``token`` is intact (and younger than ``max_age`` seconds); else ``InvalidToken``."""
         payload, _, mac = token.rpartition(".")
-        if not payload or not hmac.compare_digest(mac, self._mac(payload.encode())):
+        if not payload or not any(hmac.compare_digest(mac, candidate) for candidate in self._macs(payload.encode())):
             raise InvalidToken("bad signature")
         try:
             signed_at, value = json.loads(_unb64(payload))
@@ -124,22 +130,27 @@ class Box:
     Needs ``pip install "rational[crypto]"``. The key is derived from ``secret`` with HKDF.
     """
 
-    def __init__(self, secret: str | bytes, *, salt: str = "rational.box") -> None:
+    def __init__(
+        self, secret: str | bytes, *, salt: str = "rational.box", extra_secrets: Sequence[str | bytes] = ()
+    ) -> None:
         try:
             from cryptography.hazmat.primitives import hashes
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
             from cryptography.hazmat.primitives.kdf.hkdf import HKDF
         except ImportError as e:
             raise ImportError('Box needs the cryptography package: pip install "rational[crypto]"') from e
-        key = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt.encode(), info=b"rational.box").derive(
-            _secret(secret, "Box")
-        )
-        self._aead = AESGCM(key)
+        keys = [
+            HKDF(algorithm=hashes.SHA256(), length=32, salt=salt.encode(), info=b"rational.box").derive(
+                _secret(s, "Box")
+            )
+            for s in (secret, *extra_secrets)
+        ]
+        self._aeads = [AESGCM(key) for key in keys]  # the first encrypts; all of them decrypt
 
     def seal(self, value: Any) -> str:
         """Encrypt any JSON data into a URL-safe string."""
         nonce = secrets.token_bytes(12)
-        data = self._aead.encrypt(nonce, json.dumps(value, separators=(",", ":")).encode(), None)
+        data = self._aeads[0].encrypt(nonce, json.dumps(value, separators=(",", ":")).encode(), None)
         return _b64(nonce + data)
 
     def open(self, token: str) -> Any:
@@ -149,10 +160,14 @@ class Box:
         raw = _unb64(token)
         if len(raw) < 13:
             raise InvalidToken("malformed")
-        try:
-            return json.loads(self._aead.decrypt(raw[:12], raw[12:], None))
-        except (InvalidTag, ValueError) as e:
-            raise InvalidToken("cannot decrypt") from e
+        for aead in self._aeads:
+            try:
+                return json.loads(aead.decrypt(raw[:12], raw[12:], None))
+            except InvalidTag:
+                continue
+            except ValueError as e:
+                raise InvalidToken("malformed") from e
+        raise InvalidToken("cannot decrypt")
 
 
 # -- JSON Web Tokens ------------------------------------------------------------------------------------------
@@ -169,9 +184,16 @@ class Tokens:
     """
 
     def __init__(
-        self, secret: str | bytes, *, issuer: str | None = None, ttl: float = 3600, leeway: float = 30
+        self,
+        secret: str | bytes,
+        *,
+        issuer: str | None = None,
+        ttl: float = 3600,
+        leeway: float = 30,
+        extra_secrets: Sequence[str | bytes] = (),
     ) -> None:
-        self._key = _secret(secret, "Tokens")
+        self._keys = [_secret(s, "Tokens") for s in (secret, *extra_secrets)]
+        self._key = self._keys[0]
         self.issuer = issuer
         self.ttl = ttl
         self.leeway = leeway
@@ -192,8 +214,9 @@ class Tokens:
             header_b64, payload_b64, mac = token.split(".")
         except ValueError as e:
             raise InvalidToken("malformed") from e
-        expected = _b64(hmac.new(self._key, f"{header_b64}.{payload_b64}".encode(), hashlib.sha256).digest())
-        if not hmac.compare_digest(mac, expected):
+        signed = f"{header_b64}.{payload_b64}".encode()
+        expected = [_b64(hmac.new(key, signed, hashlib.sha256).digest()) for key in self._keys]
+        if not any(hmac.compare_digest(mac, candidate) for candidate in expected):
             raise InvalidToken("bad signature")
         try:
             header, claims = json.loads(_unb64(header_b64)), json.loads(_unb64(payload_b64))
