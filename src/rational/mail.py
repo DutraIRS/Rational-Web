@@ -29,7 +29,7 @@ import ssl
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from email.message import EmailMessage
-from email.utils import make_msgid
+from email.utils import make_msgid, parseaddr
 from html import unescape
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -82,7 +82,9 @@ class Email(BaseModel):
         if self.reply_to:
             msg["Reply-To"] = self.reply_to
         msg["Subject"] = self.subject
-        msg["Message-ID"] = make_msgid()
+        # The sender's domain: make_msgid() alone looks the machine's name up in DNS, which can hang.
+        domain = parseaddr(self.sender)[1].rpartition("@")[2] or "localhost"
+        msg["Message-ID"] = make_msgid(domain=domain)
         msg.set_content(self.text)
         msg.add_alternative(self.html, subtype="html")
         return msg

@@ -43,7 +43,7 @@ def test_messages_have_both_versions_and_no_header_injection():
     email = Email(sender="a@x.example", to=["b@x.example"], subject="Hi", html="<p>Hi</p>", text="Hi", bcc=["c@x"])
     msg = email.message()
     assert msg.is_multipart() and [p.get_content_type() for p in msg.iter_parts()] == ["text/plain", "text/html"]
-    assert msg["Bcc"] is None and msg["Message-ID"]  # blind copies never appear in the headers
+    assert msg["Bcc"] is None and msg["Message-ID"].endswith("@x.example>")  # no Bcc header; id from the sender
     for field in ({"subject": "Hi\nBcc: everyone@x"}, {"to": ["b@x\r\nBcc: e@x"]}, {"reply_to": "r@x\n"}):
         with pytest.raises(ValidationError, match="single line"):
             Email(**{**email.model_dump(), **field})

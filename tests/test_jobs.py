@@ -36,7 +36,8 @@ async def test_jobs_run_with_validated_arguments(store):
     await receipt.enqueue(Order(id=1, total=9.5), copies=2)
     await blocking.enqueue("hi")
     assert await jobs.run_pending() == 2
-    assert seen == [(Order(id=1, total=9.5), 2), "hi"]  # the model came back from JSON as a model
+    assert len(seen) == 2 and "hi" in seen  # jobs run in any order
+    assert (Order(id=1, total=9.5), 2) in seen  # the model came back from JSON as a model
     await receipt(Order(id=2, total=1), copies=3)  # calling the job runs it now
     assert seen[-1][1] == 3
 
