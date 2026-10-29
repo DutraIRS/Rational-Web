@@ -45,7 +45,9 @@ The HTTP response is set the same way: ``status`` (``404`` or ``410`` for missin
 content, the page still rendering), ``cache_control`` (``"public, max-age=3600"``; the default is
 ``no-cache``) and ``etag`` (the browser gets ``304 Not Modified`` when its copy matches). A page
 that loads the browser runtime is always ``no-store``, because it carries a page id and CSRF token
-for one visitor, and a response that sets a cookie is never cached for others. Set them on the class, or in ``mount()`` when they come from the page's
+for one visitor, and a response that sets a cookie is never cached for others. A page with only
+client components can be cached: when it sets ``cache_control`` it leaves the visitor's CSRF
+token out, and the first ``@remote`` call that needs one fetches it from ``/_rational/csrf``. Set them on the class, or in ``mount()`` when they come from the page's
 data, so one class can serve many pages:
 
 .. code-block:: python
@@ -84,11 +86,22 @@ State
        items = State(factory=list)            # fresh list per instance
        theme = State("light", scope="page")   # shared by instances on one page view
        cart = State(0, scope="session")       # shared across the browser session's tabs
+       q = State("", query="q")               # kept in the URL: /search?q=...
 
 Reading a ``State`` during ``render()`` records a dependency. Assigning a *different*
 value marks every dependent component for re-render after the event. In-place mutation
 is not detected: reassign (``self.items = [*self.items, x]``) or call
 ``self.touch("items")``.
+
+``query="name"`` keeps a ``str``, ``int``, ``float`` or ``bool`` state in the page's URL, for
+search and filter pages that people share, bookmark and reload. The page starts from the query
+string (a value that does not convert to the default's type is ignored), each change replaces the
+URL without adding a history entry, and the default value leaves the parameter out. It works in
+server components; a client component reports it as unsupported.
+
+After a deploy, a page restored from its snapshot keeps only state that still fits the new code:
+a renamed, removed or retyped ``State``, or another component at the same place, makes the
+browser load the page afresh instead of showing old values in new code.
 
 Derived state, reactions and binding
 ------------------------------------

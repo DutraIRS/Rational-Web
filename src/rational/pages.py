@@ -188,7 +188,9 @@ class PageRoute:
                 "transitions": app.view_transitions,
                 "base": base,
                 "api": base + app.api_prefix,
-                "csrf": current.csrf if current is not None else None,
+                # A page the app lets browsers or CDNs cache holds no visitor's token: rational.call
+                # fetches it from CSRF_PATH when a call needs one.
+                "csrf": current.csrf if current is not None and page.cache_control is None else None,
                 "debug": app.debug,
             }
         scripts = [base + app.islands_src, *(base + path for path in runtime.islands)] if runtime.islands else []
@@ -215,7 +217,7 @@ class PageRoute:
             dir=page.dir,
         )
         cache_control = page.cache_control if page.cache_control is not None else "no-cache"
-        if manifest:  # the page id and CSRF token belong to this visitor: never in a shared cache
+        if manifest and (manifest.get("page") or manifest.get("csrf")):  # this visitor's id or token
             cache_control = "no-store"
         headers = {"Cache-Control": cache_control}
         if page.etag:

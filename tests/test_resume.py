@@ -144,3 +144,56 @@ async def test_serverless_database_uses_a_null_pool():
     db = Database("sqlite+aiosqlite://", serverless=True)
     assert isinstance(db.engine.pool, NullPool)
     await db.engine.dispose()
+
+
+def deployed(driver, version):
+    """The same page as served by two releases of the app."""
+    from rational import PersistentSessionStore
+
+    app = App(page_snapshots=driver, session_store=PersistentSessionStore(driver))
+
+    class Counter(Component):
+        if version == "renamed":
+            count = State(0)
+        elif version == "retyped":
+            n = State("")
+        else:
+            n = State(0)
+        if version == "extended":
+            note = State("new state is fine")
+
+        def inc(self):
+            if version in ("old", "extended"):
+                self.n += 1
+
+        def render(self):
+            return Button(f"+ {version}", on_click=self.inc)
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Counter()
+
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("version", ["renamed", "retyped"])
+def test_a_deploy_that_changes_saved_state_reloads_the_page(version):
+    driver = MemorySessionDriver()
+    old, new = deployed(driver, "old"), deployed(driver, version)
+    view = old.open("/")
+    view.click("+ old")
+    new.http.cookies.set("rw_sid", old.http.cookies["rw_sid"])
+    view.client = new  # the next event reaches a worker running the new code
+    reply = view.click("+ old", check=False)
+    assert reply["error"]["code"] == "expired"  # 410: the browser reloads the page afresh
+
+
+def test_a_deploy_that_only_adds_state_resumes():
+    driver = MemorySessionDriver()
+    old, new = deployed(driver, "old"), deployed(driver, "extended")
+    view = old.open("/")
+    view.click("+ old")
+    new.http.cookies.set("rw_sid", old.http.cookies["rw_sid"])
+    view.client = new
+    assert "error" not in view.click("+ old")

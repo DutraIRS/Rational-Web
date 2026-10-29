@@ -290,6 +290,13 @@ def make_app():
         def render(self):
             return Shell()
 
+    @app.page("/cached-todos")
+    class CachedTodos(Page):
+        cache_control = "public, max-age=60"  # a CDN may keep it: it holds no visitor's token
+
+        def render(self):
+            return TodoList()
+
     @app.page("/semantics")
     class SemanticsPage(Page):
         def render(self):

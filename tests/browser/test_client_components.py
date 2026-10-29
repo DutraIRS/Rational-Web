@@ -91,6 +91,28 @@ def test_remote_calls_nested_components_and_server_children(browser, live):
     assert [e for e in errors if "status of 400" not in e] == [], errors  # the refused add is the only 400
 
 
+def test_client_components_on_cached_pages_fetch_a_token_for_remote_calls(browser, live):
+    page = browser.new_page()
+    errors = collect_errors(page)
+    page.goto(live + "/todos")  # an interactive page: the visitor now has a session (and a token)
+    page.wait_for_function("document.querySelector('rw-island').__rw")
+    token_requests = []
+    page.on("request", lambda r: token_requests.append(r.url) if r.url.endswith("/_rational/csrf") else None)
+    response = page.goto(live + "/cached-todos")
+    assert response.headers["cache-control"] == "public, max-age=60"
+    assert page.evaluate("JSON.parse(document.getElementById('rw-manifest').textContent).csrf") is None
+    page.wait_for_function("document.querySelector('rw-island').__rw")
+
+    page.get_by_label("New todo").fill("tea")
+    page.get_by_role("button", name="Add").click()  # refused for CSRF, token fetched, call retried
+    page.get_by_text("Added Tea (3 letters)").wait_for()
+    page.get_by_label("New todo").fill("jam")
+    page.get_by_role("button", name="Add").click()
+    page.get_by_text("Added Jam (3 letters)").wait_for()
+    assert len(token_requests) == 1  # fetched once, then kept
+    assert [e for e in errors if "status of 403" not in e] == [], errors  # the first, refused call
+
+
 def test_binding_computed_values_and_watchers_in_the_browser(browser, live):
     page = browser.new_page()
     errors = collect_errors(page)

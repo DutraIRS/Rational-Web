@@ -241,9 +241,9 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Error hook (`app.on_error`) for Sentry and similar, covering pages, events, `@remote` and jobs
 - [x] Secret-key rotation: sign with the newest key, accept the older ones
 - [x] Per-page HTTP control: status codes, `Cache-Control`, `ETag`
-- [ ] CSRF tokens for client components on cached, session-less pages
-- [ ] Page state kept in the URL query (search pages), restored with snapshots
-- [ ] Snapshot restore that checks saved state against the deployed components, else reloads cleanly
+- [x] CSRF tokens for client components on cached, session-less pages
+- [x] Page state kept in the URL query (search pages), restored with snapshots
+- [x] Snapshot restore that checks saved state against the deployed components, else reloads cleanly
 - [ ] Postgres session driver
 
 **0.6: more batteries**

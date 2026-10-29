@@ -34,6 +34,13 @@ All notable changes to this project are documented here. The format follows
   or set in `mount()`). A matching `If-None-Match` (strong or weak) is answered with `304`.
   Pages that load the browser runtime stay `no-store` (they carry a visitor's page id and CSRF
   token), and a response that sets a cookie is never publicly cached.
+- Cacheable pages with client components: a page that sets `cache_control` leaves the CSRF token
+  out of its HTML, and `rational.call` fetches it from `/_rational/csrf` (and retries) the first
+  time a call is refused for lack of one.
+- `State(..., query="q")`: state kept in the page URL (read on load, replaced on change, dropped at
+  its default), for search and filter pages that are shared, bookmarked and resumed.
+- Snapshot restore checks saved state against the deployed components (class, `State` names and
+  value types); anything that no longer fits makes the browser reload the page instead.
 
 ## [0.3.0a1] - 2026-10-29
 

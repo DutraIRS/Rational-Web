@@ -32,6 +32,7 @@ log = logging.getLogger("rational")
 
 PROTOCOL_VERSION = 1
 EVENT_PATH = "/_rational/event"
+CSRF_PATH = "/_rational/csrf"
 STREAM_PATH = "/_rational/stream"
 WS_PATH = "/_rational/ws"
 STREAM_KEEPALIVE_SECONDS = 15

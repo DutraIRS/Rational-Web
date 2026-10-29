@@ -114,3 +114,17 @@ def test_visitor_specific_pages_are_never_shared_in_a_cache():
     greet = TestClient(app).http.get("/greet")  # a new visitor: this response starts their session
     assert greet.headers["cache-control"] == "private, no-cache" and "set-cookie" in greet.headers
     assert greet.headers["etag"] == '"v2"'
+
+
+def test_the_csrf_endpoint_and_cacheable_pages_with_client_components():
+    from tests.clientapp import make_app as client_app
+
+    client = TestClient(client_app())
+    assert client.http.get("/_rational/csrf").json() == {"csrf": None}  # no session, nothing to protect
+    client.open("/todos")  # an interactive page starts a session
+    token = client.http.get("/_rational/csrf")
+    assert token.headers["cache-control"] == "no-store" and len(token.json()["csrf"]) > 20
+
+    cached = client.http.get("/cached-todos")
+    assert cached.headers["cache-control"] == "public, max-age=60" and '"csrf":null' in cached.text
+    assert TestClient(client_app()).http.get("/todos").headers["cache-control"] == "no-store"

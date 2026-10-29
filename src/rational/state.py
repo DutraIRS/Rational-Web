@@ -16,6 +16,8 @@ import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
+from pydantic import TypeAdapter, ValidationError
+
 from ._tracking import Cell, changed, reads, track_read, version
 
 if TYPE_CHECKING:
@@ -40,13 +42,22 @@ class State(Generic[T]):
     ``scope="page"``: one value per page view, shared by all instances of the class.
     ``scope="session"``: one value per browser session, shared across tabs. Other tabs
     pick up changes on their next event.
+
+    ``query="q"`` keeps the value in the page's URL (``?q=...``): it starts from the query string
+    (converted to the default's type) and changes replace it, so a search can be shared, bookmarked
+    and reloaded. The default value leaves the parameter out.
     """
 
     name: str
     owner: type
 
     def __init__(
-        self, default: T = MISSING, *, factory: Callable[[], T] | None = None, scope: Scope = "component"
+        self,
+        default: T = MISSING,
+        *,
+        factory: Callable[[], T] | None = None,
+        scope: Scope = "component",
+        query: str | None = None,
     ) -> None:
         if default is not MISSING and factory is not None:
             raise TypeError("pass either a default or a factory, not both")
@@ -54,9 +65,12 @@ class State(Generic[T]):
             raise TypeError("State needs a default value or a factory")
         if scope not in ("component", "page", "session"):
             raise ValueError(f"unknown state scope {scope!r}")
+        if query is not None and (scope == "session" or not isinstance(default, (str, int, float, bool))):
+            raise TypeError("query= keeps a str, int, float or bool default of one page in the URL")
         self.default = default
         self.factory = factory
         self.scope = scope
+        self.query = query
 
     def __set_name__(self, owner: type, name: str) -> None:
         self.owner = owner
@@ -72,7 +86,7 @@ class State(Generic[T]):
             return self
         store, key, cell = self._locate(instance)
         if key not in store:
-            store[key] = self._initial()
+            store[key] = self._from_query(instance) if self.query else self._initial()
         track_read(cell)
         return store[key]  # type: ignore[no-any-return]
 
@@ -82,6 +96,9 @@ class State(Generic[T]):
         store[key] = value
         if old is MISSING or not values_equal(old, value):
             self.notify(instance, cell, old)
+            if self.query and instance._rw_runtime is not None:
+                text = None if values_equal(value, self.default) else _query_text(value)
+                instance._rw_runtime.add_action({"op": "query", "name": self.query, "value": text})
 
     def notify(self, instance: Component, cell: Cell | None = None, old: Any = MISSING) -> None:
         if cell is None:
@@ -92,6 +109,21 @@ class State(Generic[T]):
         runtime = instance._rw_runtime
         if runtime is not None:
             runtime.state_changed(cell, old)
+
+    def _from_query(self, instance: Component) -> T:
+        """The value in the page's query string, if the page request has one that fits."""
+        runtime = instance._rw_runtime
+        request = runtime.context.request if runtime is not None else None
+        if request is None or request.method != "GET" or self.query is None:  # only a page load has the URL
+            return self._initial()
+        raw = request.query_params.get(self.query)
+        if raw is None:
+            return self._initial()
+        try:
+            value: T = TypeAdapter(type(self.default)).validate_python(raw)
+        except ValidationError:
+            return self._initial()  # a hand-edited or outdated link: start from the default
+        return value
 
     def _initial(self) -> T:
         if self.factory is not None:
@@ -109,6 +141,56 @@ class State(Generic[T]):
             return runtime.page_state, key, ("p", key)
         session = instance.context.session
         return session.state, key, ("s", key)
+
+
+class StateMismatch(Exception):  # noqa: N818 - a condition, not a failure of this code
+    """Saved state no longer fits the component: it was renamed, removed or retyped since it was saved."""
+
+
+def class_name(cls: type) -> str:
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def restorable(component: Any, kind: str, saved: dict[str, Any]) -> dict[str, Any]:
+    """``saved`` if it still fits ``component`` (saved as a ``kind``); else raise ``StateMismatch``.
+
+    A deploy may rename a component's ``State``, remove it or change what it holds. Restoring an old
+    value into new code would show a wrong page instead of failing, so anything that no longer
+    fits fails, and the browser loads the page afresh.
+    """
+    cls = type(component)
+    if kind != class_name(cls):
+        raise StateMismatch(f"{kind} was saved where {class_name(cls)} now is")
+    states = {
+        name: attr
+        for klass in reversed(cls.__mro__)
+        for name, attr in vars(klass).items()
+        if isinstance(attr, State) and attr.scope == "component"
+    }
+    for name, value in saved.items():
+        state = states.get(name)
+        if state is None:
+            raise StateMismatch(f"{cls.__name__}.{name} is no longer a State")
+        expected = state._initial()
+        if expected is not None and value is not None and not _same_kind(expected, value):
+            raise StateMismatch(
+                f"{cls.__name__}.{name} now holds {type(expected).__name__}, not {type(value).__name__}"
+            )
+    return saved
+
+
+def _same_kind(expected: Any, value: Any) -> bool:
+    if isinstance(expected, bool) or isinstance(value, bool):
+        return type(expected) is type(value)
+    if isinstance(expected, (int, float)):
+        return isinstance(value, (int, float))
+    if isinstance(expected, (list, tuple)):
+        return isinstance(value, (list, tuple))  # JSON turns tuples into lists
+    return isinstance(value, type(expected))
+
+
+def _query_text(value: Any) -> str:
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
 
 
 def values_equal(a: Any, b: Any) -> bool:

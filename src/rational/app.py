@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 
@@ -33,7 +33,7 @@ from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddl
 from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, PathValues, error_page
-from .protocol import EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
+from .protocol import CSRF_PATH, EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
 from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
@@ -226,6 +226,7 @@ class App:
             ("/_rational/islands.js", self._asset(self.islands_js, "text/javascript"), "GET"),
             ("/_rational/c/{name}", self._client_script, "GET"),
             ("/_rational/theme.css", self._asset(self.theme_css, "text/css"), "GET"),
+            (CSRF_PATH, self._csrf, "GET"),
             (EVENT_PATH, self._event, "POST"),
             (STREAM_PATH, self._stream, "GET"),
         ]
@@ -550,6 +551,16 @@ class App:
     def client_modules(self) -> tuple[ClientModule, ...]:
         """Every client component module compiled so far (for static export)."""
         return tuple(self._client_modules.values())
+
+    async def _csrf(self, request: Request) -> Response:
+        """This visitor's CSRF token, for client components on cached pages (which hold none).
+
+        Other sites cannot read it: framework routes send no CORS headers. ``null`` without a
+        session, when no token is needed.
+        """
+        session = await self.load_session(request)
+        token = session.csrf if session is not None else None
+        return JSONResponse({"csrf": token}, headers={"Cache-Control": "no-store"})
 
     async def _client_script(self, name: str) -> Response:
         module = self._client_files.get(name)

@@ -394,6 +394,11 @@ class _Module:
         for klass in reversed(self.cls.__mro__):
             for name, value in vars(klass).items():
                 if isinstance(value, State):
+                    if value.query is not None:
+                        raise ClientCompileError(
+                            f"{self.cls.__name__}.{name}: State(query=...) works in server components; "
+                            "keep the search state in the server component around this one"
+                        )
                     initial = value.default if value.factory is None else value.factory()
                     if initial is MISSING or not _json_value(initial):
                         raise ClientCompileError(
