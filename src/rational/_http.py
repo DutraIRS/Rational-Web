@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import anyio.to_thread
 
@@ -49,7 +49,8 @@ async def request(
 
     ``json_body`` and ``form`` set the body and its content type; ``auth`` is HTTP Basic.
     """
-    if not url.startswith("https://") and not url.startswith("http://127.0.0.1"):
+    local = urlsplit(url)
+    if local.scheme != "https" and (local.scheme, local.hostname) != ("http", "127.0.0.1"):
         raise ValueError(f"refusing to send credentials over plain HTTP: {url}")
     data: bytes | None = None
     sent = {"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})}

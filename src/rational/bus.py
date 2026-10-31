@@ -94,22 +94,28 @@ class RedisBus:
         return unsubscribe
 
     async def _read(self) -> None:
-        try:
-            async for item in self._pubsub.listen():
-                if item.get("type") != "message":
-                    continue
-                channel, data = item["channel"], item["data"]
-                channel = channel.decode() if isinstance(channel, bytes) else channel
-                text = data.decode() if isinstance(data, bytes) else str(data)
-                for callback in list(self._callbacks.get(channel, ())):
-                    try:
-                        callback(text)
-                    except Exception:
-                        log.exception("bus subscriber failed")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("the Redis bus reader stopped")
+        while True:
+            try:
+                async for item in self._pubsub.listen():
+                    if item.get("type") != "message":
+                        continue
+                    channel, data = item["channel"], item["data"]
+                    channel = channel.decode() if isinstance(channel, bytes) else channel
+                    text = data.decode() if isinstance(data, bytes) else str(data)
+                    for callback in list(self._callbacks.get(channel, ())):
+                        try:
+                            callback(text)
+                        except Exception:
+                            log.exception("bus subscriber failed")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if not any(self._callbacks.values()):
+                    return  # nobody is listening any more
+                log.exception("the Redis bus reader stopped; reconnecting")
+                await asyncio.sleep(1.0)
+                with contextlib.suppress(Exception):
+                    await self._pubsub.subscribe(*self._callbacks)  # re-subscribe after a reconnect
 
     async def close(self) -> None:
         if self._reader is not None:

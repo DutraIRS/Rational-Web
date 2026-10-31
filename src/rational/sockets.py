@@ -105,8 +105,11 @@ class Rooms:
         members.add(socket)
         bus = self.app.bus
         if bus is not None and room not in self._unsubscribe:
-            self._unsubscribe[room] = None  # claimed
-            self._unsubscribe[room] = await bus.subscribe(self._channel(room), lambda text: self._relay(room, text))
+            try:
+                self._unsubscribe[room] = await bus.subscribe(self._channel(room), lambda text: self._relay(room, text))
+            except Exception:
+                self._unsubscribe.pop(room, None)  # never leave a claim behind: a later join retries
+                raise
 
     async def leave(self, room: str, socket: Socket) -> None:
         members = self._members.get(room)

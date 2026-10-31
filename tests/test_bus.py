@@ -115,3 +115,39 @@ async def test_memory_bus_isolates_a_failing_subscriber():
     await bus.subscribe("c", got.append)
     await bus.publish("c", "x")
     assert got == ["x"]
+
+
+async def test_the_redis_bus_reader_recovers_after_an_error():
+    from rational import RedisBus
+
+    class BrokenPubSub:
+        calls = 0
+
+        async def subscribe(self, *channels):
+            BrokenPubSub.calls += 1
+
+        async def unsubscribe(self, *channels):
+            pass
+
+        async def listen(self):
+            if BrokenPubSub.calls <= 1:
+                raise RuntimeError("redis is down")
+            yield {"type": "message", "channel": b"c", "data": b"one"}
+            while True:
+                await asyncio.sleep(10)
+
+        async def aclose(self):
+            pass
+
+    class FakeFlakyClient:
+        def pubsub(self):
+            return BrokenPubSub()
+
+    bus = RedisBus(FakeFlakyClient())
+    got = []
+    await bus.subscribe("c", got.append)
+    await asyncio.sleep(0.05)
+    assert got == []  # the first listen raised
+    await asyncio.sleep(1.2)
+    assert got == ["one"]  # recovered: re-subscribed and delivered
+    await bus.close()

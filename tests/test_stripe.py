@@ -181,3 +181,22 @@ def test_a_failed_checkout_shows_an_error_page(monkeypatch):
     link = stripe.checkout_url(line_items=[{"price": "price_1", "quantity": 1}], mode="payment")
     response = client.http.get(link, follow_redirects=False)
     assert response.status_code == 502 and "Checkout is not available" in response.text
+
+
+def test_a_nan_timestamp_does_not_skip_the_freshness_check(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    app = App(secret_key="k" * 40)
+    Stripe(app, secret_key="sk_test_x", webhook_secret="whsec_1", path="/stripe")
+    payload = b'{"type": "checkout.session.completed"}'
+    t = int(time.time())
+    mac = hmac.new(b"whsec_1", b"nan." + payload, hashlib.sha256).hexdigest()
+    forged_nan = TestClient(app).http.post(
+        "/stripe/webhook", content=payload, headers={"Stripe-Signature": "t=nan,v1=" + mac}
+    )
+    assert forged_nan.status_code == 400  # nan fails the staleness check instead of bypassing it
+    mac2 = hmac.new(b"whsec_1", f"{t}.".encode() + payload, hashlib.sha256).hexdigest()
+    fresh = TestClient(app).http.post(
+        "/stripe/webhook", content=payload, headers={"Stripe-Signature": f"t={t},v1={mac2}"}
+    )
+    assert fresh.status_code == 200

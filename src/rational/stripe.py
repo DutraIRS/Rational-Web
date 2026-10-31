@@ -33,6 +33,7 @@ import hmac
 import inspect
 import json
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -170,7 +171,7 @@ class Stripe:
             age = abs(time.time() - float(timestamp))
         except ValueError:
             raise ValueError("malformed Stripe signature header") from None
-        if not signatures or age > self.tolerance:
+        if not math.isfinite(age) or not signatures or age > self.tolerance:
             raise ValueError("the Stripe signature is stale or missing")
         signed = f"{timestamp}.".encode() + payload
         expected = hmac.new(self.webhook_secret.encode(), signed, hashlib.sha256).hexdigest()

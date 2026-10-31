@@ -149,7 +149,8 @@ class HumanCheck(Component):
     started = State("")
 
     def mount(self) -> None:
-        self.started = _signer(self.context.app).sign(time.time())  # once: re-renders keep the time
+        sid = self.context.session.id  # creates the session too, so the browser gets its cookie
+        self.started = _signer(self.context.app).sign(f"{sid} {time.time()}")  # bound to this session
 
     def render(self) -> Node:
         app = self.context.app
@@ -180,9 +181,13 @@ async def check_submit(handler: Any, context: Context, form: dict[str, Any]) -> 
     if trap or not isinstance(started, str):
         raise NotHuman()
     try:
-        shown_at = float(_signer(app).unsign(started, max_age=24 * 3600))
+        sid, _, stamped = _signer(app).unsign(started, max_age=24 * 3600).partition(" ")
+        shown_at = float(stamped)
     except (InvalidToken, TypeError, ValueError):
         raise NotHuman("This form is too old; reload the page and try again") from None
+    session = context.peek_session()
+    if not sid or session is None or sid != session.id:
+        raise NotHuman()  # the token was minted for another session
     if time.time() - shown_at < app.min_form_seconds:
         raise NotHuman()
     if app.captcha is not None:

@@ -167,7 +167,7 @@ class App:
         self.rooms = Rooms(self)  # WebSocket rooms (Socket.join / publish)
         if bus is not None and hasattr(self.sessions, "on_saved"):
             self.sessions.on_saved = self._announce_session
-        self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose)
+        self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose_when_free)
         self.routes: dict[str, PageRoute] = {}  # by route path
         self.seo: Seo | None = None  # set by rational.seo.Seo
         self.captcha: Captcha | None = None  # set by rational.bots.Captcha
@@ -696,6 +696,11 @@ class App:
                         await result
                 except Exception:
                     log.exception("error in shutdown hook %r", fn)
+            if self.bus is not None and hasattr(self.bus, "close"):
+                try:
+                    await self.bus.close()
+                except Exception:
+                    log.exception("could not close the bus")
             if self.db is not None:
                 await self.db.dispose()
 

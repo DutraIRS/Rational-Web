@@ -436,8 +436,11 @@ class PageRuntime:
                     batch["load"] = [base + src for src in scripts]
                 self.publish(batch)
                 resumer = getattr(self.context.app, "resume", None)
-                if resumer is not None:
-                    await resumer.save(self)
+                if resumer is not None and not await resumer.save(self, expect_revision=self.revision):
+                    # Another worker advanced this page: this copy has diverged, drop it.
+                    if self.context.app is not None:
+                        self.context.app.pages.pop(self.id)
+                    self.dispose()
         except Exception:
             log.exception("error while pushing page updates")
 
@@ -539,7 +542,11 @@ class PageRuntime:
             del self.paths[comp.path]
         self.dirty.discard(cid)
         for cell, entries in list(self.watchers.items()):
-            self.watchers[cell] = [w for w in entries if w[0] != cid]
+            entries = [w for w in entries if w[0] != cid]
+            if entries:
+                self.watchers[cell] = entries
+            else:
+                del self.watchers[cell]
         for task, owner in list(self.tasks.items()):
             if owner == cid:
                 task.cancel()
@@ -619,6 +626,29 @@ class PageRuntime:
         for task in list(self.tasks):
             task.cancel()
         self.publish(None)  # closes any open streams
+
+    def dispose_when_free(self) -> None:
+        """Eviction path (synchronous, from TTLStore): never unmount under a running handler.
+
+        If an event or push holds ``lock``, disposal waits for it; otherwise it runs now. Safe on a
+        single event loop: the check and the call are one synchronous block, so no handler can start
+        in between.
+        """
+        if not self.lock.locked():
+            self.dispose()
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.dispose()
+            return
+        task = loop.create_task(self._dispose_locked())
+        self._pushers.add(task)
+        task.add_done_callback(self._pushers.discard)
+
+    async def _dispose_locked(self) -> None:
+        async with self.lock:
+            self.dispose()
 
     def allow_event(self, burst: int, per_second: float) -> bool:
         now = time.monotonic()

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from .context import Context
 
 MIN_SECRET_BYTES = 32
-_SCRYPT = {"n": 2**14, "r": 8, "p": 1}
+_SCRYPT = {"n": 2**17, "r": 8, "p": 1, "maxmem": 256 * 1024 * 1024}  # OWASP guidance (128 MiB)
 
 
 class InvalidToken(ValueError):  # noqa: N818 - reads naturally: except InvalidToken
@@ -69,7 +69,9 @@ def verify_password(password: str, stored: str) -> bool:
         scheme, n, r, p, salt, digest = stored.split("$")
         if scheme != "scrypt":
             return False
-        candidate = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p))
+        candidate = hashlib.scrypt(
+            password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), maxmem=_SCRYPT["maxmem"]
+        )
         return hmac.compare_digest(candidate, bytes.fromhex(digest))
     except (ValueError, TypeError):
         return False
@@ -78,7 +80,11 @@ def verify_password(password: str, stored: str) -> bool:
 def password_needs_rehash(stored: str) -> bool:
     """True if ``stored`` used weaker parameters than today's: re-hash it after a successful sign-in."""
     parts = stored.split("$")
-    return len(parts) != 6 or parts[0] != "scrypt" or parts[1:4] != [str(v) for v in _SCRYPT.values()]
+    return len(parts) != 6 or parts[0] != "scrypt" or [parts[1], parts[2], parts[3]] != [
+        str(_SCRYPT["n"]),
+        str(_SCRYPT["r"]),
+        str(_SCRYPT["p"]),
+    ]
 
 
 # -- signing ---------------------------------------------------------------------------------------------
