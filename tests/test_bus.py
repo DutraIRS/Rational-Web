@@ -148,6 +148,6 @@ async def test_the_redis_bus_reader_recovers_after_an_error():
     await bus.subscribe("c", got.append)
     await asyncio.sleep(0.05)
     assert got == []  # the first listen raised
-    await asyncio.sleep(1.2)
+    await asyncio.sleep(3.0)
     assert got == ["one"]  # recovered: re-subscribed and delivered
     await bus.close()

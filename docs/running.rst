@@ -145,8 +145,8 @@ that session's data merges the newer record in, which marks its pages dirty and 
 holds a single subscription, however many sessions it serves. Delivery is best effort and at most
 once, so a missed message only delays the update to the page's next event. ``app.bus`` is also yours
 for other channels (``await app.bus.publish(channel, text)`` and
-``await app.bus.subscribe(channel, callback)``). The Redis bus and driver are tested here against
-fake clients, not a live server.
+``await app.bus.subscribe(channel, callback)``). CI runs the Redis bus and driver against a live
+server, with the SQL drivers against real Postgres.
 
 Client-side navigation
 ----------------------

@@ -238,6 +238,8 @@ def _db(argv: Sequence[str]) -> None:
             migrations.current(db, args.directory)
         else:
             migrations.history(db, args.directory)
+    except ImportError as exc:  # alembic/sqlalchemy not installed
+        raise SystemExit(f"rational db: {exc}; pip install 'rational[migrations]'") from None
     except (TargetError, migrations.MigrationError) as exc:
         raise SystemExit(f"rational db: {exc}") from None
 

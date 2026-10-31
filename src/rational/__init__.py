@@ -63,6 +63,7 @@ from .router import Router
 from .sockets import Socket
 from .state import Binding, State, computed, watch
 from .stores import PersistentSessionStore, RedisSessionDriver, SQLSessionDriver
+from .stripe import Stripe, StripeError
 from .styling import Breakpoint, Style, Theme
 
 try:
