@@ -24,7 +24,7 @@ from .apidocs import swagger_html
 from .assets import Adapter, Asset, as_asset, render_assets
 from .bots import Limiter
 from .component import Page
-from .concurrency import SyncHandlers
+from .concurrency import SyncHandlers, cancel_and_wait
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
@@ -733,8 +733,7 @@ class App:
         try:
             yield
         finally:
-            sweeper.cancel()
-            await asyncio.gather(sweeper, return_exceptions=True)
+            await cancel_and_wait([sweeper])
             self.pages.clear()  # unmount() runs, open streams end
             await self._finish_tasks()
             for fn in reversed(self._shutdown):
@@ -765,9 +764,7 @@ class App:
         """Let background work finish for a moment, then cancel what is left."""
         if self._tasks:
             _done, pending = await asyncio.wait(self._tasks, timeout=SHUTDOWN_TASK_SECONDS)
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_and_wait(pending)
 
 
 def _with_origins(sources: Sequence[str], assets: Sequence[Asset]) -> list[str]:

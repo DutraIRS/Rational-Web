@@ -39,6 +39,8 @@ import anyio.to_thread
 from pydantic import validate_call
 from pydantic_core import to_jsonable_python
 
+from .concurrency import cancel_and_wait
+
 if TYPE_CHECKING:
     from .app import App
 
@@ -283,15 +285,11 @@ class Jobs:
         if self._wake is not None:
             self._wake.set()
         ticks, self._ticks = self._ticks, []
-        for task in ticks:
-            task.cancel()
-        await asyncio.gather(*ticks, return_exceptions=True)
+        await cancel_and_wait(ticks)
         workers, self._workers = self._workers, []
         if workers:
             _, pending = await asyncio.wait(workers, timeout=grace)
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_and_wait(pending)
 
     async def run_pending(self) -> int:
         """Run every job that is due now, in this task, and return how many ran (for tests and scripts)."""

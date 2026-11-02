@@ -1,15 +1,19 @@
 """WebSocket classes with rooms, and the typed repository."""
 
 import asyncio
+from typing import Any
 
+import anyio
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from starlette.testclient import TestClient as StarletteClient
 from starlette.websockets import WebSocketDisconnect
 
 from rational import App, FieldError, Forbidden, MemoryBus, Page, PersistentSessionStore, Router, Socket, Text
 from rational.backend.database import Database, Repository
+from rational.context import Context
+from rational.sockets import _serve
 from rational.stores import MemorySessionDriver
 
 ORIGIN = {"origin": "http://testserver"}
@@ -160,6 +164,25 @@ async def test_a_client_that_stops_reading_is_disconnected_without_holding_up_th
     await stuck.send({"after": "closing"})  # dropped, not queued without end
     assert stuck._outbox.qsize() <= 2
     writer.cancel()
+
+
+async def test_a_cancel_during_cleanup_stays_a_cancel_of_whoever_asked():
+    """Cancel scopes (anyio's, so Starlette's) only recognize their own cancellation by its message."""
+
+    class ClientAlreadyGone:
+        async def receive(self):
+            await asyncio.sleep(0)  # the writer starts, and waits for messages
+            return {"type": "websocket.disconnect"}
+
+    class CancelledWhileLeaving(Socket):
+        async def disconnect(self) -> None:
+            asyncio.get_running_loop().call_soon(scope.cancel)  # lands while the workers are being stopped
+
+    app = App()
+    socket = CancelledWhileLeaving(Context(app), ClientAlreadyGone(), app)
+    with anyio.CancelScope() as scope:
+        await _serve(app, socket, TypeAdapter(Any))
+    assert scope.cancelled_caught
 
 
 def signed_in_app(**kwargs):

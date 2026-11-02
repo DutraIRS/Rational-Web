@@ -16,6 +16,8 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from .concurrency import cancel_and_wait
+
 log = logging.getLogger("rational")
 
 Callback = Callable[[str], None]
@@ -130,8 +132,7 @@ class RedisBus:
     async def close(self) -> None:
         reader, self._reader = self._reader, None
         if reader is not None:
-            reader.cancel()
-            await asyncio.gather(reader, return_exceptions=True)
+            await cancel_and_wait([reader])
         pubsub, self._pubsub = self._pubsub, None
         self._callbacks.clear()
         if pubsub is not None:

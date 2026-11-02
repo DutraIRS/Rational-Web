@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from pydantic import TypeAdapter, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from .concurrency import cancel_and_wait
 from .errors import RationalError
 from .http import SESSION_COOKIE, same_origin
 
@@ -280,6 +281,8 @@ async def _serve(app: App, socket: Socket, adapter: TypeAdapter[Any]) -> None:
         await socket._close(SERVER_ERROR)
     finally:
         socket._closing = True
+        for worker in workers:
+            worker.cancel()  # first: they stop whatever happens below
         if session is not None:
             session.listeners.discard(socket)
         for room in list(socket.rooms):
@@ -291,9 +294,7 @@ async def _serve(app: App, socket: Socket, adapter: TypeAdapter[Any]) -> None:
             await socket.disconnect()
         except Exception:
             log.exception("error in %s.disconnect", cls.__name__)
-        for worker in workers:
-            worker.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
+        await cancel_and_wait(workers)
 
 
 def socket_endpoint(app: App, cls: type[Socket]) -> Any:
