@@ -16,7 +16,13 @@ Events
    cookie the page view is bound to **and** the session's CSRF token (header). Payloads
    are validated against handler annotations before the handler runs. Unknown handlers
    resynchronize the page instead of failing. Events are size-limited (64 KiB) and
-   rate-limited per page view.
+   rate-limited per page view. On a page with ``auth="required"``, a visitor who has signed out in
+   the meantime is sent to sign in again instead of the handler running.
+
+Requests
+   Bodies over ``App(max_request_bytes=...)`` (10 MiB) are refused with 413, before they are read
+   when the request announces its size and as soon as they pass the limit otherwise. Tampered
+   cookies, tokens and headers count as invalid, whatever characters they contain.
 
 Sessions
    The browser only holds an opaque random id (``HttpOnly``, ``SameSite=Lax``, ``Secure``
@@ -24,6 +30,17 @@ Sessions
    token, even when the request then fails, and nothing is ever stored under the old id
    after a login. With a persistent store, a logout on one worker ends the session on all of
    them. Page views expire after 30 idle minutes and are bounded in number.
+
+Passwords and timing
+   scrypt with parameters from the OWASP list, on a bounded pool of worker threads. Sign-in and
+   account emails take the same time whether or not the account exists, when you use
+   ``averify_password(password, None)`` and :class:`~rational.accounts.Accounts`.
+
+Live connections
+   A WebSocket handshake must come from this site or a listed origin. ``auth="required"`` is
+   checked again with every message, when the session changes and every 30 seconds, so signing
+   out ends the connection. A client that stops reading is disconnected; it cannot slow the others
+   or fill the server's memory.
 
 Redirects
    ``Redirect`` refuses ``javascript:``, ``vbscript:`` and ``data:`` targets, and
@@ -39,7 +56,8 @@ Remote API
 
 Headers
    ``X-Content-Type-Options: nosniff``, ``Referrer-Policy``, ``X-Frame-Options`` and,
-   with ``App(csp=True)``, a nonce-based ``Content-Security-Policy``.
+   with ``App(csp=True)``, a nonce-based ``Content-Security-Policy``. Other origins your pages
+   need go in ``app.csp_sources``, by directive.
 
 Development mode
    Shows source code and tracebacks. It binds to localhost by default and warns when it

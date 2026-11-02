@@ -106,8 +106,9 @@ browser load the page afresh instead of showing old values in new code.
 Derived state, reactions and binding
 ------------------------------------
 
-``@computed`` turns a method into a value read like an attribute. It is cached until state changes,
-and whoever reads it re-renders when the state it was computed from changes::
+``@computed`` turns a method into a value read like an attribute. It is cached until any state or
+props on the page, or the session's data, change, and whoever reads it re-renders when the state it
+was computed from changes::
 
     @computed
     def total(self) -> int:

@@ -51,7 +51,15 @@ when a proxy serves the app under a sub-path.
 
    Page views (component state) live in process memory unless you enable resumable pages
    (below). Otherwise run one worker per container, or use sticky sessions when you run several
-   (``--workers N`` prints a reminder).
+   (``--workers N`` prints a reminder without them).
+
+Stopping
+--------
+
+When the server stops, open connections get 30 seconds to finish (1 in ``--dev``), since a live
+stream would otherwise hold a deploy up for ever: ``app.run(timeout_graceful_shutdown=60)`` changes
+that. Then the app unmounts the pages it holds, gives background work a few seconds, and runs your
+``on_shutdown`` hooks. Expired pages and sessions are let go of once a minute while the app runs.
 
 Sessions across workers and restarts
 ------------------------------------
@@ -145,8 +153,8 @@ that session's data merges the newer record in, which marks its pages dirty and 
 holds a single subscription, however many sessions it serves. Delivery is best effort and at most
 once, so a missed message only delays the update to the page's next event. ``app.bus`` is also yours
 for other channels (``await app.bus.publish(channel, text)`` and
-``await app.bus.subscribe(channel, callback)``). CI runs the Redis bus and driver against a live
-server, with the SQL drivers against real Postgres.
+``await app.bus.subscribe(channel, callback)``). The bus reconnects by itself after losing Redis.
+CI runs the Redis bus and driver against a live server, with the SQL drivers against real Postgres.
 
 Client-side navigation
 ----------------------

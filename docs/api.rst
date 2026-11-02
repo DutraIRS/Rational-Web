@@ -5,7 +5,7 @@ Application
 -----------
 
 .. autoclass:: rational.App
-   :members: page, service, include, url_for, on_startup, on_error, authenticate, signer, static, run
+   :members: page, socket, service, include, url_for, on_startup, on_shutdown, on_error, authenticate, signer, box, static, run
 
 .. autoclass:: rational.Router
    :members: page, service, on_startup, include
@@ -98,7 +98,7 @@ Security, cookies and sockets
 -----------------------------
 
 .. automodule:: rational.security
-   :members: hash_password, verify_password, password_needs_rehash, Tokens, Signer, Box, InvalidToken
+   :members: hash_password, verify_password, ahash_password, averify_password, password_needs_rehash, same_text, Tokens, Signer, Box, InvalidToken
 
 .. autoclass:: rational.cookies.Cookies
    :members: get, set, delete

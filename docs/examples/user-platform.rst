@@ -9,7 +9,7 @@ Real accounts: sign-up with hashed passwords, sign-in, profile settings, roles a
    ├── app.py            # composition root
    ├── settings.py       # DATABASE_URL, session lifetime
    ├── models/           # database.py, user.py, forms.py
-   ├── services/         # security.py, auth.py, accounts.py, admin.py
+   ├── services/         # auth.py, accounts.py, admin.py
    └── views/
        ├── components/   # shell, account_forms
        ├── pages/        # account.py, admin.py
@@ -18,11 +18,10 @@ Real accounts: sign-up with hashed passwords, sign-in, profile settings, roles a
 1. Passwords
 ------------
 
-.. literalinclude:: ../../examples/user-platform/services/security.py
-   :caption: services/security.py
-
-``hashlib.scrypt`` from the standard library, a random salt per password, and a constant-time
-comparison. After signing in, the ``?next=`` target goes through :func:`rational.local_path`, which
+:func:`rational.security.ahash_password` and :func:`rational.security.averify_password` hash with
+scrypt on a worker thread, with a random salt per password and a constant-time comparison. Signing
+in calls ``averify_password`` even when no account has that address: it does the same work and
+says no, so the time it takes does not reveal who has an account. After signing in, the ``?next=`` target goes through :func:`rational.local_path`, which
 refuses anything that is not a path on this site (``//evil.example``, ``/\evil.example`` and the
 like), so a crafted link cannot turn the login page into an open redirect.
 

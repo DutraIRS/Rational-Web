@@ -9,13 +9,19 @@ Signing people in
 
 Passwords are hashed with scrypt and a random salt; store the hash, never the password::
 
-    from rational.security import hash_password, verify_password
+    from rational.security import ahash_password, averify_password
 
-    user.password = hash_password(form.password)
+    user.password = await ahash_password(form.password)
     ...
-    if not verify_password(form.password, user.password):
+    if not await averify_password(form.password, user.password if user else None) or user is None:
         raise FieldError("password", "Wrong email or password")
     self.context.session.login(user.id)      # new session id, against session fixation
+
+Hashing takes about a quarter of a second and 16 MiB, on purpose. ``ahash_password`` and
+``averify_password`` do it on a few worker threads, so other requests keep running and a burst of
+sign-ins waits its turn; plain ``hash_password`` and ``verify_password`` are for scripts and
+``threaded`` handlers. Pass ``None`` when there is no such user: it does the same work and says no,
+so the time a failed sign-in takes does not tell who has an account.
 
 ``session.login(user_id)`` and ``session.logout()`` are all a browser app needs: the session cookie is
 ``HttpOnly``, and every event and API call is CSRF-checked. ``auth="required"`` on a page or a
@@ -47,11 +53,14 @@ Sign in with Google, GitHub or Microsoft
     ButtonLink("Sign in with Google", href=oauth.login_url("google", next="/orders"))
 
 Register ``https://shop.example/auth/<provider>/callback`` as the redirect URI with each provider.
-Every sign-in carries a one-time ``state`` kept in the session (so another site cannot complete a
-sign-in for you), a nonce and a PKCE challenge, and the person's identity is fetched from the
-provider over HTTPS. ``next`` only accepts paths on this site. ``microsoft(tenant=...)`` covers
-Microsoft accounts and Entra ID; ``oidc(name, issuer, ...)`` any OpenID Connect provider (Okta,
-Auth0, Keycloak, GitLab, ...). GitHub gives the verified primary email.
+Every sign-in carries a one-time ``state`` kept in a short-lived signed cookie (so another site
+cannot complete a sign-in for you), a nonce and a PKCE challenge, and the person's identity is
+fetched from the provider over HTTPS. ``next`` only accepts paths on this site. ``on_login`` may
+raise a :class:`~rational.errors.RationalError` to refuse with its own message.
+``microsoft(tenant=...)`` covers Microsoft accounts and Entra ID; ``oidc(name, issuer, ...)`` any
+OpenID Connect provider (Okta, Auth0, Keycloak, GitLab, ...). GitHub gives the verified primary
+email. Microsoft does not report whether an address is verified, so ``person.email_verified`` is
+false there: recognize its users by ``person.id`` instead.
 
 Sign in with Apple
 '''''''''''''''''''
@@ -98,8 +107,10 @@ the REST API directly (``pip install`` nothing extra)::
             ...
 
 ``stripe.checkout_url`` signs the parameters, so nothing is sent to Stripe while the page
-renders and the link cannot be altered. ``stripe.portal(customer_id, return_url=...)`` opens the
-customer portal. Webhook handlers run only after the ``Stripe-Signature`` header is checked
+renders and the link cannot be altered. ``stripe.portal(customer_id, return_url=...)`` creates a
+customer portal session. ``Stripe(app, ..., base_url="https://shop.example")`` makes site paths
+(``/done``) absolute everywhere; without it, ``checkout_url`` uses the address of the request, and
+``checkout`` and ``portal`` need absolute URLs. Webhook handlers run only after the ``Stripe-Signature`` header is checked
 against the raw request body, with a five-minute replay window; without ``webhook_secret`` every
 webhook call is refused. Point Stripe at ``https://shop.example/stripe/webhook``. Stripe may send
 an event more than once: make handlers idempotent (record ``event["id"]``).
@@ -137,13 +148,15 @@ Then, from your pages and services:
   address (the link stops working if the address changes).
 * ``await accounts.send_sign_in_link(email)`` and ``user = await accounts.sign_in(token)`` sign in
   without a password: the link works once, for 15 minutes. Follow it with
-  ``session.login(accounts.user_id(user))``.
+  ``session.login(accounts.user_id(user))``. Mail scanners open links to check them, so have the
+  page at that link ask for a click before calling ``sign_in``.
 
 A bad, expired or used link raises :class:`~rational.security.InvalidToken`; a too-short password
 raises ``FieldError("password", ...)``. The ``send_*`` methods behave the same whether or not the
-address has an account, so they cannot be used to find out who is registered, and send at most one
-message per address and purpose a minute. Give the mailer ``jobs=`` so that sending takes the same
-short time either way, and pass ``store=jobs.store`` when the app runs on several workers.
+address has an account, and never wait for a mail server, so they cannot be used to find out who is
+registered. They send at most one message per address and purpose a minute. Give the mailer
+``jobs=`` for retries (without it, a message that fails is only logged), and pass
+``store=jobs.store`` when the app runs on several workers.
 Paths, lifetimes and the minimum password length are class attributes; override
 ``reset_message``, ``verify_message`` and ``sign_in_message`` to change the wording or translate it.
 
@@ -200,8 +213,8 @@ and services alike::
     cookies.delete("last_tab")
 
 Defaults: ``HttpOnly``, ``SameSite=Lax``, ``Secure`` over HTTPS. A forged or tampered signed cookie
-reads as missing. The framework's own cookies (``rw_sid``, ``rw_theme``, ``rw_lang``) cannot be
-overwritten by accident.
+reads as missing. Names starting with ``rw_`` belong to the framework (``rw_sid``, ``rw_theme``,
+``rw_lang``, ``rw_oauth``), so they cannot be overwritten by accident.
 
 Data
 ----
@@ -213,7 +226,7 @@ for the everyday operations::
     notes = Repository(self.db, Note)
     note = await notes.add(title="Hi", owner_id=self.user.id)
     page = await notes.page(Note.owner_id == self.user.id, page=2, size=20, order_by=Note.id.desc())
-    # page.items, page.total, page.pages
+    # page.items, page.total, page.pages; in primary key order unless order_by says otherwise
     await notes.update(note.id, title="Hello")
     await notes.delete(note.id)
 
@@ -250,6 +263,13 @@ and is size- and rate-limited (``max_message_bytes``, ``burst``, ``rate``). ``pu
 room on every worker when the app has a bus (``App(bus=RedisBus(...))``). Raising a ``FieldError`` or
 ``RemoteError`` in ``receive`` sends ``{"error": ...}`` back to that connection.
 
+``auth = "required"`` keeps checking after the connection opens: with every message, whenever the
+session changes on this worker and every ``recheck_seconds`` (30), so signing out closes the
+connection (code 1008), even when it happened on another worker. Messages to a client wait in a
+queue of ``queue_size`` (256): one that stops reading is disconnected (code 1013) instead of holding
+up the others. Changes a socket makes to the session stay on this worker, for this connection: to
+change what the session stores, use a page event or a service.
+
 Pages do not need sockets to stay live: server push for pages is built in (see :doc:`concurrency`).
 
 Keeping bots out
@@ -259,7 +279,7 @@ Three tools from :mod:`rational.bots`, from least to most friction for people:
 
 **Rate limits.** ``@limit("5/minute")`` caps how often one client may call an event handler, a
 ``@remote`` method or load a page (on the ``Page`` class). Past the limit the caller gets HTTP 429
-with ``retry_after``. ``per="ip"`` (default), ``"user"`` (the signed-in user, else the IP) or
+with ``retry_after`` (and a ``Retry-After`` header, for pages and ``@remote`` methods). ``per="ip"`` (default), ``"user"`` (the signed-in user, else the IP) or
 ``"session"``. Rates read ``"100/hour"`` or ``"10/15 minutes"``. Counts live in memory; on several
 workers, share them: ``app.limiter = Limiter(RedisSessionDriver(url=...))``.
 
@@ -279,8 +299,9 @@ handler::
                         Button("Sign up", type="submit"), on_submit=self.create)
 
 ``HumanCheck`` adds a field people never see but form-filling bots do, and the signed time the
-form was shown. ``@human`` refuses a submit that fills the trap, comes faster than
-``app.min_form_seconds`` (2 s) or lacks the fields; the handler never sees them.
+form was shown on this page view. ``@human`` refuses a submit that fills the trap, comes faster than
+``app.min_form_seconds`` (2 s), comes from another page view or lacks the fields; the handler never
+sees them.
 
 **CAPTCHA.** For forms under real attack, add a challenge to every ``HumanCheck``::
 
@@ -288,11 +309,12 @@ form was shown. ``@human`` refuses a submit that fills the trap, comes faster th
 
     Captcha(app, "turnstile", site_key=SITE_KEY, secret=SECRET_KEY)   # or "hcaptcha", "recaptcha"
 
-Cloudflare Turnstile is free and asks most people nothing. The widget's script and frames are
-added to the pages and to the Content-Security-Policy, and ``@human`` checks the answer with the
-provider before the handler runs; a missing or wrong answer is shown under the form as a
-``captcha`` field error. Widgets render when the page loads, so keep a CAPTCHA form on a page of
-its own rather than revealing it later.
+Cloudflare Turnstile is free and asks most people nothing. The widget's script loads only on pages
+with a ``HumanCheck``, its origins are added to the Content-Security-Policy (other origins your app
+needs go in ``app.csp_sources``, by directive), and ``@human`` checks the answer with the provider
+before the handler runs; a missing or wrong answer is shown under the form as a ``captcha`` field
+error. Widgets render when the page loads, so keep a CAPTCHA form on a page of its own rather than
+revealing it later; client navigation loads such a page in full.
 
 Search engines and link previews
 --------------------------------
@@ -329,14 +351,15 @@ Error reporting
 ---------------
 
 ``app.on_error`` hooks receive every unhandled exception, from pages, event handlers, ``@remote``
-methods and jobs, with where it happened. That is where Sentry and similar services plug in::
+methods, jobs, a page's background tasks and sockets, with where it happened. That is where Sentry
+and similar services plug in::
 
     import sentry_sdk
 
     @app.on_error
     def report(info):                         # an ErrorInfo
         with sentry_sdk.new_scope() as scope:
-            scope.set_tag("kind", info.kind)  # "page", "event", "remote" or "job"
+            scope.set_tag("kind", info.kind)  # "page", "event", "remote", "job", "task" or "socket"
             scope.set_context("rational", info.extra)
             sentry_sdk.capture_exception(info.exc)
 
@@ -363,7 +386,7 @@ with growing delays::
     await send_receipt.enqueue(42)            # returns at once
     await send_receipt.enqueue_in(3600, 42)   # in an hour
 
-    @jobs.every(hours=24)                     # once a day (midnight UTC), on one worker
+    @jobs.every(hours=24)                     # at midnight UTC, on one worker
     async def purge_old_carts() -> None:
         ...
 
@@ -371,7 +394,10 @@ Arguments are stored as JSON (numbers, strings, lists, dicts, Pydantic models) a
 against the function's annotations when the job runs; wrong arguments fail at ``enqueue``.
 A plain ``def`` job runs in a worker thread. Delivery is *at least once*: a job cut off by a crash
 or a deploy runs again after its lease (5 minutes by default), so a job should be safe to run
-twice. In tests, ``await jobs.run_pending()`` runs everything that is due, right away.
+twice. A schedule runs at the start of each interval, as with cron: starting the app does not run
+it, and a moment when no worker is up is skipped. If the store goes away, workers and schedules
+log it and keep trying. In tests, ``await jobs.run_pending()`` runs everything that is due, right
+away.
 
 Email
 -----
@@ -400,5 +426,6 @@ API::
   ``Postmark(server_token)``; ``Console()`` logs messages instead of sending them (development)
   and ``Memory()`` keeps them in ``.outbox`` (tests).
 * With ``jobs=``, ``send`` queues the message and returns; delivery is retried up to five times.
-  Without it, ``send`` waits for the server and raises if it fails.
+  Without it, ``send`` waits for the server and raises if it fails. A resend from
+  :class:`~rational.accounts.Accounts` never waits, either way.
 * Line breaks in addresses and subjects are refused, so a form value cannot add headers.

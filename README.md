@@ -44,7 +44,7 @@ $ python app.py --prod    # production: pages at /, JSON API at /api, one origin
 $ python app.py --export site/   # static pages as plain HTML, for any static host
 ```
 
-> **Status: alpha (0.1).** The architecture is implemented and tested end to end, including in
+> **Status: alpha.** The architecture is implemented and tested end to end, including in
 > a real browser, but the public API may still change before 1.0.
 
 ## Why
@@ -55,7 +55,7 @@ Rational Web keeps the whole application in Python **without pretending the brow
 there**:
 
 - **Server-rendered first.** Every page is real HTML before any script runs. Static pages ship
-  zero JavaScript. Interactive pages load an 8 KiB (gzipped) runtime that wires events and
+  zero JavaScript. Interactive pages load a 9 KiB (gzipped) runtime that wires events and
   morphs updated HTML into place, preserving focus and typing.
 - **Explicit boundaries.** Event handlers run on the server, unless you write a
   `ClientComponent`: then the same Python is compiled to JavaScript and runs in the browser, with
