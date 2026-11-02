@@ -221,3 +221,19 @@ def test_document_settings_are_not_props_and_dir_is_checked():
     app.page("/")(Plain)
     with pytest.raises(ValueError, match="dir must be"):
         TestClient(app).http.get("/")
+
+
+async def test_values_that_need_encoding_are_written_under_their_own_name(tmp_path):
+    app = App()
+
+    @app.page("/docs/{slug}", paths=[{"slug": "a b"}, {"slug": "é"}])
+    class Doc(Page):
+        slug: str
+
+        def render(self):
+            return Text(f"doc {self.slug}")
+
+    report = await export_site(app, tmp_path)
+    assert report.pages == ["/docs/a%20b", "/docs/%C3%A9"]
+    assert "doc a b" in (tmp_path / "docs" / "a b" / "index.html").read_text(encoding="utf-8")
+    assert "doc é" in (tmp_path / "docs" / "é" / "index.html").read_text(encoding="utf-8")

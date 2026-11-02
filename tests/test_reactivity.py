@@ -1,8 +1,12 @@
 """Derived state (computed), reactions (watch), two-way binding (bind) and provide/inject."""
 
+import functools
+
 import pytest
+from pydantic import BaseModel
 
 from rational import App, Button, Checkbox, Column, Component, Input, Page, Select, State, Text, computed, watch
+from rational.binding import bind_payload
 from rational.testing import TestClient
 
 
@@ -197,3 +201,167 @@ def test_view_transitions_are_opt_in():
     html = TestClient(app).http.get("/").text
     manifest = json.loads(re.search(r'id="rw-manifest">(.*?)</script>', html).group(1))
     assert manifest["transitions"] is True and "@view-transition{navigation:auto}" in app.theme_css
+
+
+def test_a_failing_unmount_is_logged_and_the_rest_still_unmount(caplog):
+    unmounted = []
+
+    class Bad(Component):
+        def unmount(self):
+            raise ValueError("no")
+
+        def render(self):
+            return Text("bad")
+
+    class Good(Component):
+        def unmount(self):
+            unmounted.append(True)
+
+        def render(self):
+            return Text("good")
+
+    app = App()
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Column(Bad(), Good())
+
+    TestClient(app).http.get("/")
+    assert unmounted == [True] and "error in Bad.unmount" in caplog.text
+
+
+def test_unmount_cannot_be_async():
+    with pytest.raises(TypeError, match="cannot be async"):
+
+        class Bad(Component):
+            async def unmount(self):
+                pass
+
+
+def test_computed_values_survive_changes_on_other_pages():
+    calls = []
+
+    class Shows(Component):
+        n = State(1)
+
+        @computed
+        def double(self):
+            calls.append(self)
+            return self.n * 2
+
+        def inc(self):
+            self.n += 1
+
+        def render(self):
+            return Column(Text(f"{self.double} {self.double}"), Button("Inc", on_click=self.inc))
+
+    app = App()
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Shows()
+
+    client = TestClient(app)
+    one = client.open("/")
+    assert len(calls) == 1  # read twice, calculated once
+    runtime = app.pages.get(one.manifest["page"])
+    shows = next(c for c in runtime.components.values() if isinstance(c, Shows))
+    assert shows.double == 2  # the page's session started after its render, which counts as a change
+    before = calls.count(shows)
+    client.open("/").click("Inc")
+    assert shows.double == 2 and calls.count(shows) == before  # another page's change is not this page's
+
+
+def test_computed_values_follow_state_props_and_session_data():
+    class Child(Component):
+        label: str = "a"
+
+        @computed
+        def shout(self):
+            return self.label.upper()
+
+        def render(self):
+            return Text(self.shout)
+
+    class Shows(Component):
+        label = State("a")
+
+        @computed
+        def visits(self):
+            return self.context.session.get("visits", 0)
+
+        def visit(self):
+            self.context.session["visits"] = self.visits + 1
+
+        def rename(self):
+            self.label = "b"
+
+        def render(self):
+            return Column(
+                Text(f"visits={self.visits}"),
+                Child(label=self.label),
+                Button("Visit", on_click=self.visit),
+                Button("Rename", on_click=self.rename),
+            )
+
+    app = App()
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Shows()
+
+    view = TestClient(app).open("/")
+    view.click("Visit")
+    assert "visits=1" in view.text
+    view.click("Rename")
+    assert "B" in view.text
+
+
+def test_computed_on_an_unmounted_component_calculates_every_time():
+    calls = []
+
+    class Free(Component):
+        @computed
+        def value(self):
+            calls.append(True)
+            return 1
+
+    free = Free()
+    assert free.value == free.value == 1 and len(calls) == 2
+
+
+def test_wrappers_of_one_decorator_keep_their_own_annotations():
+    def logged(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    class Form1(BaseModel):
+        a: int
+
+    class Form2(BaseModel):
+        b: str
+
+    @logged
+    def first(form: Form1):
+        return form
+
+    @logged
+    def second(form: Form2):
+        return form
+
+    first.__annotations__["form"], second.__annotations__["form"] = Form1, Form2
+    assert isinstance(bind_payload(first, "submit", {"form": {"a": "1"}})[0], Form1)
+    assert isinstance(bind_payload(second, "submit", {"form": {"b": "x"}})[0], Form2)
+
+
+def test_an_annotation_that_cannot_be_resolved_is_reported(caplog):
+    namespace: dict = {}
+    exec("def handler(form: 'NoSuchModel'): ...", namespace)
+    assert bind_payload(namespace["handler"], "submit", {"form": {"a": 1}}) == [{"a": 1}]
+    assert "cannot be resolved" in caplog.text

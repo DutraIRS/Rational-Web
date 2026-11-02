@@ -21,6 +21,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
@@ -120,6 +121,7 @@ def _needs_server(body: bytes) -> bool:
 def _page_file(path: str) -> str:
     """``/about`` is written as ``about/index.html``; a route that names its file, like
     ``/docs/faq.html``, keeps that name, so an exported site can keep existing URLs."""
+    path = unquote(path)
     if path.endswith(".html"):
         return path.lstrip("/")
     return f"{path.strip('/')}/index.html".lstrip("/")
@@ -153,7 +155,7 @@ async def _get(app: App, path: str, base: str) -> tuple[int, bytes]:
         "http_version": "1.1",
         "method": "GET",
         "scheme": "http",
-        "path": path,
+        "path": unquote(path),
         "raw_path": path.encode(),
         "root_path": base,
         "query_string": b"",

@@ -33,7 +33,7 @@ from .http import base_path
 from .rendering.builder import h, normalize_children
 from .rendering.html import to_html
 from .rendering.nodes import AttrValue, Node, RawHTML, TextNode
-from .state import call_watcher, restorable, values_equal
+from .state import call_watcher, check_page_state, restorable, values_equal
 from .styling.compiler import StyleSheet
 from .styling.style import merge
 
@@ -80,9 +80,12 @@ class PageRuntime:
         self.pending_watch: dict[tuple[str, str, str], Any] = {}  # first old value wins (batched)
         self.origin: tuple[str, dict[str, str]] | None = None  # route path and its params, for snapshots
         self.restore: dict[str, dict[str, Any]] = {}  # saved component state by path, applied while resuming
+        self.resuming = False  # being rebuilt from a snapshot: saved page state must still fit the code
+        self.requires_user = False  # the route has auth="required"
         self.dirty: set[str] = set()
         self.actions: list[dict[str, Any]] = []
         self.revision = 0
+        self.changes = 0  # state or props changed: what computed values remember having seen
         self.session_revision = -1
         self.interactive = False
         self.lock = asyncio.Lock()
@@ -98,6 +101,7 @@ class PageRuntime:
         self.tasks: dict[asyncio.Task[None], str] = {}
         # Client components: the compiled modules this page uses, and the scripts the browser still needs.
         self.islands: dict[str, ClientModule] = {}
+        self.page_scripts: list[str] = []  # absolute URLs this page loads besides those (a CAPTCHA widget's)
         self._new_scripts: list[str] = []
         self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._push_scheduled = False
@@ -209,28 +213,37 @@ class PageRuntime:
         """Ship ``module`` (its script and every style it may need), and the modules it creates in the browser."""
         if module.path in self.islands:
             return
-        self.islands[module.path] = module
-        if self.served:
-            self._new_scripts.append(module.path)
-        for style in module.styles:  # the browser may render any of its states without asking the server
-            self.sheet.use(style)
         app = self.context.app
         assert app is not None
+        if self.served:
+            if not self.islands:  # the first one on this page: the island runtime comes first
+                self._new_scripts.append(app.islands_src)
+            self._new_scripts.append(module.path)
+        self.islands[module.path] = module
+        for style in module.styles:  # the browser may render any of its states without asking the server
+            self.sheet.use(style)
         for child in module.children:
             child_module = app.client_module(child)
             if child_module is not None:
                 self._use_module(child_module)
 
-    def take_scripts(self) -> list[str]:
-        """Client component scripts that became necessary after the page was served (once each)."""
-        if not self._new_scripts:
-            return []
-        scripts, self._new_scripts = self._new_scripts, []
+    def use_script(self, src: str) -> None:
+        """Load the script at the absolute URL ``src`` on this page, once."""
+        if src not in self.page_scripts:
+            self.page_scripts.append(src)
+            if self.served:
+                self._new_scripts.append(src)
+
+    def document_scripts(self, base: str) -> list[str]:
+        """The scripts of the page's HTML, in order."""
         app = self.context.app
-        assert app is not None
-        if len(scripts) == len(self.islands):  # the page had none before: the island runtime comes first
-            scripts.insert(0, app.islands_src)
-        return scripts
+        islands = [app.islands_src, *self.islands] if app is not None and self.islands else []
+        return [*(base + src for src in islands), *self.page_scripts]
+
+    def take_scripts(self, base: str) -> list[str]:
+        """Scripts that became necessary after the page was served (once each)."""
+        scripts, self._new_scripts = self._new_scripts, []
+        return [src if "://" in src else base + src for src in scripts]
 
     async def _mount_or_reuse(self, comp: Component, path: str, parent: str | None) -> Component:
         existing_cid = self.paths.get(path)
@@ -252,6 +265,8 @@ class PageRuntime:
         saved = self.restore.get(path)
         if saved:  # resuming from a snapshot: only state that still fits this component's code
             comp._rw_state.update(restorable(comp, saved["type"], saved["state"]))
+        if self.resuming:
+            check_page_state(comp, self.page_state)
         result = comp.mount()
         if inspect.isawaitable(result):
             await result
@@ -351,6 +366,7 @@ class PageRuntime:
         self.component_deps.setdefault(cid, set()).add(cell)
 
     def state_changed(self, cell: Cell, old: Any = None) -> None:
+        self.changes += 1
         if current_frame.get() is not None:
             raise RuntimeError("state must not be assigned during render(); do it in an event handler or mount()")
         self.dirty.update(self.deps.get(cell, ()))
@@ -389,10 +405,15 @@ class PageRuntime:
     ) -> None:
         try:
             await fn(*args, **kwargs)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("error in background task %s", getattr(fn, "__qualname__", fn))
+        except Exception as exc:
+            await self._report(exc, f"error in background task {getattr(fn, '__qualname__', fn)}")
+
+    async def _report(self, exc: Exception, message: str) -> None:
+        app = self.context.app
+        if app is None:
+            log.error(message, exc_info=exc)
+        else:
+            await app.report_error(exc, "task", message, context=self.context)
 
     def schedule_push(self) -> None:
         if self._push_scheduled or self.closed:
@@ -429,11 +450,10 @@ class PageRuntime:
                     "css": self.sheet.drain(),
                     "actions": self.take_actions(),
                 }
-                scripts = self.take_scripts()
+                request = self.context.request
+                scripts = self.take_scripts(base_path(request) if request is not None else "")
                 if scripts:
-                    request = self.context.request
-                    base = base_path(request) if request is not None else ""
-                    batch["load"] = [base + src for src in scripts]
+                    batch["load"] = scripts
                 self.publish(batch)
                 resumer = getattr(self.context.app, "resume", None)
                 if resumer is not None and not await resumer.save(self, expect_revision=self.revision):
@@ -441,8 +461,9 @@ class PageRuntime:
                     if self.context.app is not None:
                         self.context.app.pages.pop(self.id)
                     self.dispose()
-        except Exception:
-            log.exception("error while pushing page updates")
+        except Exception as exc:
+            self.resend()
+            await self._report(exc, "error while pushing page updates")
 
     def publish(self, batch: dict[str, Any] | None) -> None:
         for queue in list(self.subscribers):
@@ -541,17 +562,20 @@ class PageRuntime:
         if comp.path is not None and self.paths.get(comp.path) == cid:
             del self.paths[comp.path]
         self.dirty.discard(cid)
-        for cell, entries in list(self.watchers.items()):
-            entries = [w for w in entries if w[0] != cid]
-            if entries:
-                self.watchers[cell] = entries
-            else:
-                del self.watchers[cell]
+        if type(comp)._rw_watchers:
+            for cell, entries in list(self.watchers.items()):
+                entries = [w for w in entries if w[0] != cid]
+                if entries:
+                    self.watchers[cell] = entries
+                else:
+                    del self.watchers[cell]
         for task, owner in list(self.tasks.items()):
             if owner == cid:
                 task.cancel()
         try:
             comp.unmount()
+        except Exception:
+            log.exception("error in %s.unmount", type(comp).__name__)
         finally:
             comp._rw_runtime = None
 
@@ -569,7 +593,7 @@ class PageRuntime:
             await app.limiter.check(handler, self.context)
             if event == "submit" and isinstance(payload.get("form"), dict):
                 payload = {**payload, "form": dict(payload["form"])}
-                await check_submit(handler, self.context, payload["form"])
+                await check_submit(handler, self.context, payload["form"], self.id)
         args = bind_payload(handler, event, payload)
         await invoke(handler, tuple(args), timeout=timeout, threads=threads)
 
@@ -601,6 +625,11 @@ class PageRuntime:
         self.resync = False
         return patches
 
+    def resend(self) -> None:
+        """The browser is out of sync with this page: the next flush sends all of it."""
+        self.dirty.add(self.page.cid or "")
+        self.resync = True
+
     def _has_dirty_ancestor(self, cid: str, dirty: set[str]) -> bool:
         parent = self.parent.get(cid)
         while parent is not None:
@@ -618,6 +647,8 @@ class PageRuntime:
 
     def dispose(self) -> None:
         """Unmount everything (the page view expired or was evicted)."""
+        if self.closed:
+            return
         self.closed = True
         if self.session is not None:
             self.session.listeners.discard(self)

@@ -2,13 +2,14 @@
 
 import base64
 import hashlib
+import json
 import time
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from rational import App, Page, Text, _http
-from rational.oauth import OAuth, github, google, microsoft, oidc
+from rational import App, Forbidden, Page, Text, _http
+from rational.oauth import OAuth, apple, github, google, microsoft, oidc
 from rational.testing import TestClient
 
 
@@ -275,3 +276,96 @@ def test_apple_without_cryptography_reports_a_helpful_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_crypto)
     with pytest.raises(ImportError, match="rational\\[crypto\\]"):
         provider.secret()
+
+
+def test_a_provider_that_cannot_be_reached_shows_an_error_page(monkeypatch):
+    async def unreachable(*args, **kwargs):
+        raise _http.HTTPError(0, "timed out", "https://idp.example")
+
+    monkeypatch.setattr(_http, "request", unreachable)
+    provider = google(client_id="id", client_secret="secret")
+    app, oauth, _signed_in = oauth_app(provider)
+    reply = TestClient(app).http.get(oauth.login_url("google"), follow_redirects=False)
+    assert reply.status_code == 502 and "Could not sign in" in reply.text
+
+
+def test_a_half_answered_discovery_changes_nothing(monkeypatch):
+    async def partial(*args, **kwargs):
+        return {"authorization_endpoint": "https://idp.example/authorize"}
+
+    monkeypatch.setattr(_http, "request", partial)
+    provider = google(client_id="id", client_secret="secret")
+    app, oauth, _signed_in = oauth_app(provider)
+    assert TestClient(app).http.get(oauth.login_url("google"), follow_redirects=False).status_code == 502
+    assert provider.authorize_url == ""  # so the next sign-in asks again
+
+
+def test_only_providers_that_answer_with_a_form_post_accept_one(fake):
+    app, oauth, _signed_in = oauth_app(google(client_id="id", client_secret="secret"))
+    client = TestClient(app)
+    _location, params = start(client, oauth.login_url("google"))
+    reply = client.http.post(
+        "/auth/google/callback", data={"state": params["state"], "code": "c"}, follow_redirects=False
+    )
+    assert reply.status_code == 405
+
+
+def test_a_forged_state_with_non_ascii_characters_is_refused_not_a_crash(fake):
+    app, oauth, signed_in = oauth_app(google(client_id="id", client_secret="secret"))
+    client = TestClient(app)
+    start(client, oauth.login_url("google"))
+    assert callback(client, "google", state="é", code="c").status_code == 400 and signed_in == []
+
+
+@pytest.mark.parametrize("answer", [None, [], "text", {"no": "sub"}])
+def test_nonsense_from_the_profile_endpoint_shows_an_error_page(monkeypatch, fake, answer):
+    async def replies(method, url, **kwargs):
+        return answer if "userinfo" in url else await fake(method, url, **kwargs)
+
+    monkeypatch.setattr(_http, "request", replies)
+    app, oauth, _signed_in = oauth_app(google(client_id="id", client_secret="secret"))
+    client = TestClient(app)
+    _location, params = start(client, oauth.login_url("google"))
+    assert callback(client, "google", state=params["state"], code="c").status_code == 502
+
+
+def test_on_login_can_refuse_with_its_own_message(fake):
+    async def refuse(context, person):
+        raise Forbidden("This account is suspended")
+
+    app, oauth, _signed_in = oauth_app(google(client_id="id", client_secret="secret"), on_login=refuse)
+    client = TestClient(app)
+    _location, params = start(client, oauth.login_url("google"))
+    reply = callback(client, "google", state=params["state"], code="c")
+    assert reply.status_code == 403 and "suspended" in reply.text
+
+
+def test_client_secrets_stay_out_of_logs():
+    assert "s3cret" not in repr(google(client_id="id", client_secret="s3cret"))
+
+
+def test_apple_needs_an_elliptic_curve_key():
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    pem = (
+        ed25519.Ed25519PrivateKey.generate()
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+    with pytest.raises(TypeError, match="EC P-256"):
+        apple(client_id="id", team_id="t", key_id="k", private_key=pem).secret()
+
+
+def test_apples_settings_and_a_name_that_is_not_a_name():
+    provider = apple(client_id="id", team_id="t", key_id="k", private_key="pem")
+    assert provider.pkce is False and provider.response_mode == "form_post"
+    assert provider.secret_lifetime <= 600  # a new one is made for every token request
+    claims = {"iss": "https://appleid.apple.com", "aud": "id", "nonce": "n", "exp": time.time() + 60, "sub": "a"}
+    token = "x." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".y"
+    for form_user in ("[1, 2]", '{"name": "Ada"}', '{"name": {"firstName": 1}}', "not json"):
+        assert provider.from_id_token(token, nonce="n", form_user=form_user).name is None
+    assert provider.from_id_token(token, nonce="n", form_user='{"name": {"firstName": "Ada"}}').name == "Ada"
+    with pytest.raises(ValueError, match="malformed"):
+        provider.from_id_token("x." + base64.urlsafe_b64encode(b"[1]").decode().rstrip("=") + ".y", nonce="n")

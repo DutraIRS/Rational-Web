@@ -4,8 +4,10 @@ import asyncio
 
 import httpx
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
-from rational import App, Button, Column, Component, FieldError, NotFound, Page, State, Text, redirect
+from rational import App, Button, Column, Component, FieldError, Forbidden, NotFound, Page, State, Text, redirect
+from rational.backend import Service, remote
 from rational.testing import TestClient
 
 
@@ -544,3 +546,194 @@ def test_a_non_ascii_csrf_header_is_refused_not_a_crash(app):
     page = client.open("/")
     response = post_event(client, page, headers={"X-RW-CSRF": "é".encode("latin-1")})
     assert response.status_code == 403
+
+
+def test_starargs_handler_is_rejected():
+    from rational.binding import check_signature
+
+    with pytest.raises(TypeError, match="must not take \\*args"):
+        check_signature(lambda *args: None)
+
+
+def test_two_required_arguments_is_rejected():
+    from rational.binding import check_signature
+
+    with pytest.raises(TypeError, match="at most one argument"):
+        check_signature(lambda a, b: None)
+
+
+def test_bodies_over_the_limit_are_refused_before_reading_them():
+    class Echo(Service):
+        @remote
+        async def ping(self, text: str) -> dict:
+            return {"text": text}
+
+    app = App(max_request_bytes=1024)
+    app.service(Echo)
+    client = TestClient(app)
+    assert client.http.post("/api/echo/ping", json={"text": "short"}).json() == {"text": "short"}
+
+    declared = client.http.post("/api/echo/ping", json={"text": "x" * 2000})
+    assert declared.status_code == 413 and declared.json()["error"]["code"] == "too_large"
+    assert declared.headers["x-content-type-options"] == "nosniff"
+
+    def chunks():
+        for _ in range(4):
+            yield b"x" * 512
+
+    chunked = client.http.post("/api/echo/ping", content=chunks())  # no Content-Length: counted as it arrives
+    assert chunked.status_code == 413
+
+
+def test_oversized_events_are_refused_from_their_declared_length():
+    app = App(max_event_bytes=64)
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Button("Go", on_click=lambda: None)
+
+    client = TestClient(app)
+    client.open("/")
+    reply = client.http.post("/_rational/event", content=b"x" * 65)
+    assert reply.status_code == 413 and reply.json()["error"]["code"] == "too_large"
+
+
+def signed_in_page_app():
+    app = App(login_path="/login")
+    runs = []
+
+    @app.page("/login")
+    class Login(Page):
+        def mount(self):
+            self.context.session.login("ada")
+
+        def render(self):
+            return Text("signed in")
+
+    @app.page("/account", auth="required")
+    class Account(Page):
+        def act(self):
+            runs.append("acted")
+
+        def sign_out(self):
+            self.context.session.logout()
+
+        def render(self):
+            return Column(Button("Act", on_click=self.act), Button("Sign out", on_click=self.sign_out))
+
+    return app, runs
+
+
+def test_a_signed_out_visitor_cannot_use_a_page_that_requires_signing_in():
+    app, runs = signed_in_page_app()
+    client = TestClient(app)
+    client.http.get("/login")
+    page = client.open("/account")
+    page.click("Act")
+    assert runs == ["acted"]
+
+    runtime = app.pages.get(page.manifest["page"])
+    runtime.session.data.clear()  # signed out elsewhere, say
+    reply = page.click("Act", check=False)
+    assert reply["error"]["code"] == "stale_revision" and {"op": "reload"} in reply["actions"]
+    assert runs == ["acted"]
+
+
+def test_streams_of_such_a_page_refuse_a_signed_out_visitor():
+    app, _runs = signed_in_page_app()
+    client = TestClient(app)
+    client.http.get("/login")
+    page = client.open("/account")
+    app.pages.get(page.manifest["page"]).session.data.clear()
+    assert client.http.get(f"/_rational/stream?page={page.manifest['page']}").status_code == 403
+
+
+def test_websocket_streams_of_such_a_page_refuse_a_signed_out_visitor():
+    app, _runs = signed_in_page_app()
+    app.websocket = True
+    app.fastapi.add_api_websocket_route("/_rational/ws", app._ws)
+    client = TestClient(app)
+    client.http.get("/login")
+    page = client.open("/account")
+    app.pages.get(page.manifest["page"]).session.data.clear()
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.http.websocket_connect(
+            f"/_rational/ws?page={page.manifest['page']}", headers={"origin": "http://testserver"}
+        ),
+    ):
+        pass
+
+
+class Flaky(Component):
+    mode = State("")
+
+    def render(self):
+        if self.mode == "crash":
+            raise ValueError("render exploded")
+        if self.mode == "redirect":
+            raise redirect("/elsewhere")
+        if self.mode == "forbidden":
+            raise Forbidden("Not for you")
+        return Column(
+            Text(f"mode={self.mode}"),
+            *[
+                Button(m, on_click=lambda m=m: setattr(self, "mode", m))
+                for m in ("ok", "crash", "redirect", "forbidden")
+            ],
+        )
+
+
+def flaky_app(**kwargs):
+    app = App(**kwargs)
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Flaky()
+
+    return app
+
+
+def test_a_render_that_fails_after_an_event_answers_like_any_failed_event_and_the_page_recovers():
+    crashes = []
+
+    class Once(Component):
+        armed = State(False)
+
+        def arm(self):
+            self.armed = True
+
+        def render(self):
+            if self.armed and not crashes:
+                crashes.append(True)
+                raise ValueError("render exploded")
+            return Column(Text(f"armed={self.armed}"), Button("Arm", on_click=self.arm))
+
+    app = App()
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Once()
+
+    page = TestClient(app).open("/")
+    reply = page.click("Arm", check=False)
+    assert reply["error"] == {"code": "internal", "message": "Something went wrong"} and reply["patches"] == []
+
+    page.click("Arm")  # the handler is gone, so the browser is out of step: it gets the whole page again
+    assert "armed=True" in page.text
+
+
+def test_a_redirect_or_refusal_from_a_re_render_reaches_the_browser():
+    page = TestClient(flaky_app()).open("/")
+    assert page.click("redirect", check=False)["actions"] == [{"op": "navigate", "url": "/elsewhere"}]
+    page = TestClient(flaky_app()).open("/")
+    reply = page.click("forbidden", check=False)
+    assert reply["error"]["code"] == "forbidden"
+
+
+def test_debug_mode_explains_a_failed_re_render():
+    page = TestClient(flaky_app(debug=True)).open("/")
+    assert "render exploded" in page.click("crash", check=False)["error"]["message"]

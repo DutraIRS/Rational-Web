@@ -56,7 +56,10 @@ class MemoryBus:
 class RedisBus:
     """Redis pub/sub (``pip install "rational[redis]"``). Pass a ``redis.asyncio`` client or a URL."""
 
+    reconnect_delay = 1.0  # seconds to wait after losing the connection, before trying again
+
     def __init__(self, client: Any = None, *, url: str | None = None) -> None:
+        self._owns_client = client is None
         if client is None:
             try:
                 from redis.asyncio import Redis
@@ -67,7 +70,7 @@ class RedisBus:
             client = Redis.from_url(url)
         self.client = client
         self._pubsub: Any = None
-        self._callbacks: dict[str, list[Callback]] = defaultdict(list)
+        self._callbacks: dict[str, list[Callback]] = {}
         self._reader: asyncio.Task[None] | None = None
 
     async def publish(self, channel: str, message: str) -> None:
@@ -76,19 +79,24 @@ class RedisBus:
     async def subscribe(self, channel: str, callback: Callback) -> Unsubscribe:
         if self._pubsub is None:
             self._pubsub = self.client.pubsub()
-        first = not self._callbacks[channel]
-        self._callbacks[channel].append(callback)
+        first = channel not in self._callbacks
+        self._callbacks.setdefault(channel, []).append(callback)
         if first:
-            await self._pubsub.subscribe(channel)
+            try:
+                await self._pubsub.subscribe(channel)
+            except Exception:
+                self._callbacks.pop(channel, None)
+                raise
         if self._reader is None or self._reader.done():
             self._reader = asyncio.get_running_loop().create_task(self._read())
 
         async def unsubscribe() -> None:
-            callbacks = self._callbacks[channel]
-            with contextlib.suppress(ValueError):
-                callbacks.remove(callback)
+            callbacks = self._callbacks.get(channel, [])
+            if callback not in callbacks:
+                return
+            callbacks.remove(callback)
             if not callbacks:
-                self._callbacks.pop(channel, None)
+                del self._callbacks[channel]
                 await self._pubsub.unsubscribe(channel)
 
         return unsubscribe
@@ -97,28 +105,36 @@ class RedisBus:
         while True:
             try:
                 async for item in self._pubsub.listen():
-                    if item.get("type") != "message":
-                        continue
-                    channel, data = item["channel"], item["data"]
-                    channel = channel.decode() if isinstance(channel, bytes) else channel
-                    text = data.decode() if isinstance(data, bytes) else str(data)
-                    for callback in list(self._callbacks.get(channel, ())):
-                        try:
-                            callback(text)
-                        except Exception:
-                            log.exception("bus subscriber failed")
-            except asyncio.CancelledError:
-                raise
+                    self._dispatch(item)
+                return  # the last channel was unsubscribed; the next subscribe starts a new reader
             except Exception:
-                if not any(self._callbacks.values()):
-                    return  # nobody is listening any more
+                if not self._callbacks:
+                    return
                 log.exception("the Redis bus reader stopped; reconnecting")
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(self.reconnect_delay)
                 with contextlib.suppress(Exception):
-                    await self._pubsub.subscribe(*self._callbacks)  # re-subscribe after a reconnect
+                    await self._pubsub.subscribe(*self._callbacks)
+
+    def _dispatch(self, item: dict[str, Any]) -> None:
+        if item.get("type") != "message":
+            return
+        channel, data = item["channel"], item["data"]
+        channel = channel.decode() if isinstance(channel, bytes) else channel
+        text = data.decode() if isinstance(data, bytes) else str(data)
+        for callback in list(self._callbacks.get(channel, ())):
+            try:
+                callback(text)
+            except Exception:
+                log.exception("bus subscriber failed")
 
     async def close(self) -> None:
-        if self._reader is not None:
-            self._reader.cancel()
-        if self._pubsub is not None:
-            await self._pubsub.aclose()
+        reader, self._reader = self._reader, None
+        if reader is not None:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+        pubsub, self._pubsub = self._pubsub, None
+        self._callbacks.clear()
+        if pubsub is not None:
+            await pubsub.aclose()
+        if self._owns_client:
+            await self.client.aclose()

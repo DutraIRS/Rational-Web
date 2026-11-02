@@ -29,7 +29,15 @@ from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
 from .errors import ErrorInfo
-from .http import SESSION_COOKIE, THEME_COOKIE, ScopedCORS, SecurityHeadersMiddleware, base_path
+from .http import (
+    SESSION_COOKIE,
+    THEME_COOKIE,
+    BodyLimitMiddleware,
+    ScopedCORS,
+    SecurityHeadersMiddleware,
+    base_path,
+    content_security_policy,
+)
 from .i18n import I18n
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, PathValues, error_page
@@ -37,7 +45,7 @@ from .protocol import CSRF_PATH, EVENT_PATH, STREAM_PATH, WS_PATH, handle_event,
 from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
-from .security import Signer
+from .security import Box, Signer
 from .session import Session, SessionBackend, SessionStore, TTLStore
 from .sockets import Rooms
 from .styling.compiler import StyleCompiler
@@ -60,6 +68,8 @@ S = TypeVar("S", bound=type)
 
 _IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
 SESSION_CHANNEL = "rational:sessions"  # bus channel: "<boot id> <session id>" after each session write
+SWEEP_SECONDS = 60  # how often expired pages and sessions are let go of
+SHUTDOWN_TASK_SECONDS = 5  # how long background work (an email on its way, say) may finish at shutdown
 
 
 class App:
@@ -69,7 +79,8 @@ class App:
     ``/api``, with OpenAPI docs at ``/api/docs``) and framework assets under ``/_rational``.
     Run it with ``python app.py --dev`` or ``--prod`` (see :mod:`rational.cli`).
 
-    Page views are held in process memory: run a single worker, or use sticky sessions.
+    Page views are held in process memory: run a single worker, or several with sticky sessions
+    or page snapshots (``App(page_snapshots=...)``).
     """
 
     def __init__(
@@ -98,6 +109,7 @@ class App:
         event_burst: int = 40,
         event_rate: float = 20.0,
         max_event_bytes: int = 64 * 1024,
+        max_request_bytes: int = 10 * 1024 * 1024,
         handler_timeout: float | None = None,
         sync_handlers: SyncHandlers = "loop",
         client_nav: bool = False,
@@ -129,7 +141,7 @@ class App:
         self.i18n = i18n
         self._secret_key = secret_key or os.environ.get("RATIONAL_SECRET_KEY")
         env_old = os.environ.get("RATIONAL_OLD_SECRET_KEYS", "")  # comma-separated, newest first
-        self._old_secret_keys = tuple(old_secret_keys) or tuple(k for k in env_old.split(",") if k.strip())
+        self._old_secret_keys = tuple(old_secret_keys) or tuple(k.strip() for k in env_old.split(",") if k.strip())
         if adapter is not None and adapter.needs_inline_styles and csp:
             raise ValueError(f"this adapter needs inline styles and cannot be used with csp=True ({adapter.notes})")
         self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
@@ -173,8 +185,8 @@ class App:
         self.captcha: Captcha | None = None  # set by rational.bots.Captcha
         self.limiter = Limiter()  # counts @limit calls; Limiter(RedisSessionDriver(...)) across workers
         self.min_form_seconds = 2.0  # @human: a person takes at least this long to fill in a form
-        self.frame_origins: list[str] = []  # Content-Security-Policy frame-src (a CAPTCHA widget, say)
-        self.extra_script_origins: list[str] = []  # script origins beyond the app's script assets
+        # Origins to add to the Content-Security-Policy, by directive: {"frame-src": ["https://..."]}.
+        self.csp_sources: dict[str, list[str]] = {}
         self.exported_files: list[str] = []  # extra paths a static export writes (sitemap.xml, ...)
         self._routes_by_class: dict[type[Page], list[PageRoute]] = {}
         self.resume: PageResumer | None = (
@@ -186,7 +198,6 @@ class App:
         self._shutdown: list[Callable[[], Any]] = []
         self._error_hooks: list[Callable[[ErrorInfo], Any]] = []
         self._startup_error: BaseException | None = None
-        self._requests = 0
 
         if isinstance(database, str):
             from .backend.database import Database
@@ -217,6 +228,7 @@ class App:
             redoc_url=None,
             openapi_url=f"{self.api_prefix}/openapi.json" if api_docs else None,
         )
+        self.fastapi.add_middleware(BodyLimitMiddleware, limit=max_request_bytes)
         self.fastapi.add_middleware(TelemetryMiddleware, telemetry=self.logging)
         self.fastapi.add_middleware(SecurityHeadersMiddleware)
         if self.cors_origins:
@@ -317,13 +329,17 @@ class App:
         return cls
 
     def include(self, router: Router) -> None:
-        """Register everything a :class:`~rational.Router` recorded: pages, services and startup hooks."""
+        """Register everything a :class:`~rational.Router` recorded: pages, sockets, services and hooks."""
         for entry in router.pages:
             self.page(entry.path, title=entry.title, auth=entry.auth, paths=entry.paths)(entry.page)
+        for path, socket in router.sockets:
+            self.socket(path)(socket)
         for service in router.services:
             self.service(service)
         for hook in router.startup:
             self.on_startup(hook)
+        for hook in router.shutdown:
+            self.on_shutdown(hook)
 
     def url_for(self, page: type[Page], **params: Any) -> str:
         routes = self._routes_by_class.get(page)
@@ -350,24 +366,34 @@ class App:
     def on_error(self, fn: Callable[[ErrorInfo], Any]) -> Callable[[ErrorInfo], Any]:
         """Register an error hook (sync or async) for unhandled exceptions.
 
-        Hooks cover pages, event handlers, ``@remote`` methods and jobs, and are how Sentry and
-        similar services plug in. Exceptions raised by a hook are logged and discarded: error
-        hooks must never break error handling.
+        Hooks cover pages, event handlers, ``@remote`` methods, jobs, a page's background tasks and
+        sockets, and are how Sentry and similar services plug in. Exceptions raised by a hook are
+        logged and discarded: error hooks must never break error handling.
         """
         self._error_hooks.append(fn)
         return fn
 
-    async def _run_error_hooks(self, info: ErrorInfo) -> None:
-        import contextlib
-
+    async def report_error(
+        self,
+        exc: BaseException,
+        kind: str,
+        message: str,
+        *,
+        request: Request | None = None,
+        context: Context | None = None,
+        level: int = logging.ERROR,
+        **extra: Any,
+    ) -> None:
+        """Log an unhandled exception and tell the ``on_error`` hooks. Never raises."""
+        log.log(level, message, exc_info=(type(exc), exc, exc.__traceback__))
+        info = ErrorInfo(exc, kind, request, context, extra)
         for hook in self._error_hooks:
             try:
                 result = hook(info)
                 if inspect.isawaitable(result):
                     await result
             except Exception:
-                with contextlib.suppress(Exception):
-                    logging.getLogger("rational").exception("error hook %r failed", getattr(hook, "__name__", hook))
+                log.exception("error hook %r failed", getattr(hook, "__name__", hook))
 
     def authenticate(self, fn: Callable[[Context], Any]) -> Callable[[Context], Any]:
         """Replace the default authenticator (``session.user``).
@@ -414,12 +440,22 @@ class App:
             session = await self.load_session(request)
         ctx = Context(self, request, session)
         request.state.rational_context = ctx
+        await self.resolve_user(ctx)
+        return ctx
+
+    async def websocket_context(self, websocket: WebSocket, session: Session | None) -> Context:
+        ctx = Context(self, None, session)
+        ctx.websocket = websocket
+        await self.resolve_user(ctx)
+        return ctx
+
+    async def resolve_user(self, ctx: Context) -> None:
+        """Ask the authenticator, if the app has one, who is calling."""
         if self.authenticator is not None:
             user = self.authenticator(ctx)
             if inspect.isawaitable(user):
                 user = await user
             ctx.set_user(user)
-        return ctx
 
     async def commit_session(self, ctx: Context) -> bool:
         """Apply a pending id rotation (login, logout). Returns True if the browser needs a new cookie."""
@@ -452,9 +488,17 @@ class App:
         still accepts values signed with ``old_secret_keys`` (key rotation)."""
         return Signer(self.secret_key, salt=salt, extra_secrets=self._old_secret_keys)
 
+    def box(self, salt: str) -> Box:
+        """A :class:`~rational.security.Box` for ``salt``, with the same key rotation as :meth:`signer`."""
+        return Box(self.secret_key, salt=salt, extra_secrets=self._old_secret_keys)
+
+    def cookie_secure(self, request: Request) -> bool:
+        """Whether cookies set on this request's response carry the ``Secure`` flag."""
+        return self.secure_cookies if self.secure_cookies is not None else request.url.scheme == "https"
+
     async def finish(self, request: Request, response: Response, ctx: Context) -> None:
         """Persist session changes (creation, id rotation) and cookies set during the request."""
-        secure = self.secure_cookies if self.secure_cookies is not None else request.url.scheme == "https"
+        secure = self.cookie_secure(request)
         ctx.apply_cookies(response, secure=secure)
         if await self.commit_session(ctx):
             response.set_cookie(
@@ -496,12 +540,6 @@ class App:
         if chosen in ("light", "dark"):
             return chosen
         return None if self.theme_mode == "system" else self.theme_mode
-
-    def housekeeping(self) -> None:
-        self._requests += 1
-        if self._requests % 500 == 0:
-            self.pages.sweep()
-            self.sessions.sweep()
 
     # -- endpoints ---------------------------------------------------------------------------------
 
@@ -581,13 +619,18 @@ class App:
         """Configured stylesheets and scripts, then the dev script (debug only)."""
         return render_assets(self.stylesheets, self.scripts, base, nonce) + self.dev_head(nonce, base)
 
-    @property
-    def style_origins(self) -> list[str]:
-        return sorted({a.origin for a in self.stylesheets if a.origin})
-
-    @property
-    def script_origins(self) -> list[str]:
-        return sorted({a.origin for a in self.scripts if a.origin} | set(self.extra_script_origins))
+    def apply_csp(self, response: Response, nonce: str | None, *, inline_styles: bool = False) -> None:
+        """Set the page's ``Content-Security-Policy``, when ``App(csp=True)`` gave it a nonce."""
+        if nonce is None:
+            return
+        sources = {
+            **self.csp_sources,
+            "script-src": _with_origins(self.csp_sources.get("script-src", ()), self.scripts),
+            "style-src": _with_origins(self.csp_sources.get("style-src", ()), self.stylesheets),
+        }
+        response.headers["Content-Security-Policy"] = content_security_policy(
+            nonce, inline_styles=inline_styles, sources=sources
+        )
 
     def dev_head(self, nonce: str | None, base: str = "") -> str:
         """The live-reload/error-overlay script tag, in debug mode only."""
@@ -614,12 +657,12 @@ class App:
         return await http_exception_handler(request, exc)
 
     async def _server_error(self, request: Request, exc: Exception) -> Response:
-        logging.getLogger("rational").exception("unhandled request error", exc_info=(type(exc), exc, exc.__traceback__))
-        await self._run_error_hooks(ErrorInfo(exc, "page", request))
-        response = PlainTextResponse("Internal Server Error", status_code=500)
         ctx = getattr(request.state, "rational_context", None)
-        if isinstance(ctx, Context):
-            await self.finish(request, response, ctx)
+        context = ctx if isinstance(ctx, Context) else None
+        await self.report_error(exc, "page", "unhandled request error", request=request, context=context)
+        response = PlainTextResponse("Internal Server Error", status_code=500)
+        if context is not None:
+            await self.finish(request, response, context)
         return response
 
     @staticmethod
@@ -686,9 +729,14 @@ class App:
                 raise
             traceback.print_exception(type(exc), exc, exc.__traceback__)
             self._startup_error = exc
+        sweeper = asyncio.get_running_loop().create_task(self._sweep_forever())
         try:
             yield
         finally:
+            sweeper.cancel()
+            await asyncio.gather(sweeper, return_exceptions=True)
+            self.pages.clear()  # unmount() runs, open streams end
+            await self._finish_tasks()
             for fn in reversed(self._shutdown):
                 try:
                     result = fn()
@@ -703,6 +751,27 @@ class App:
                     log.exception("could not close the bus")
             if self.db is not None:
                 await self.db.dispose()
+
+    async def _sweep_forever(self) -> None:
+        while True:
+            await asyncio.sleep(SWEEP_SECONDS)
+            try:
+                self.pages.sweep()
+                self.sessions.sweep()
+            except Exception:
+                log.exception("could not sweep expired pages and sessions")
+
+    async def _finish_tasks(self) -> None:
+        """Let background work finish for a moment, then cancel what is left."""
+        if self._tasks:
+            _done, pending = await asyncio.wait(self._tasks, timeout=SHUTDOWN_TASK_SECONDS)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+
+def _with_origins(sources: Sequence[str], assets: Sequence[Asset]) -> list[str]:
+    return sorted({*sources, *(asset.origin for asset in assets if asset.origin)})
 
 
 def _digest(text: str) -> str:

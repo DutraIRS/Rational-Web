@@ -65,6 +65,19 @@ def test_submit_label_and_disabled():
     assert "Join" in html and "disabled" in html
 
 
+def test_disabled_reaches_every_kind_of_control():
+    class Everything(BaseModel):
+        name: str
+        bio: str = Field("", json_schema_extra={"widget": "textarea"})
+        color: Literal["red", "blue"] = "red"
+        active: bool = False
+
+    html = render(ModelForm(Everything, disabled=True))
+    assert html.count("disabled") >= 5  # every control and the button
+    for tag in ("<input", "<textarea", "<select"):
+        assert all("disabled" in part.split(">")[0] for part in html.split(tag)[1:]), tag
+
+
 def test_model_instance_supplies_values():
     html = render(ModelForm(Signup, values=Signup(username="grace", email="g@x.io", password="longenough", age=30)))
     assert 'value="grace"' in html and 'value="30"' in html

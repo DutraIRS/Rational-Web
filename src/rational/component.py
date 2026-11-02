@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import itertools
 import sys
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar
 
-from ._tracking import changed
 from .events import ClientOp
 from .http import is_local_path
 from .state import Binding, State, values_equal
@@ -63,6 +63,8 @@ class Component:
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        if inspect.iscoroutinefunction(cls.__dict__.get("unmount")):
+            raise TypeError(f"{cls.__name__}.unmount cannot be async: nothing would wait for it")
         props: dict[str, Any] = {}
         class_vars: set[str] = set()
         for base in reversed(cls.__mro__[1:]):
@@ -194,8 +196,8 @@ class Component:
         """Take props from a freshly constructed twin, keeping state and identity."""
         for name in self._rw_props:
             if name in fresh.__dict__:
-                if not values_equal(getattr(self, name, None), fresh.__dict__[name]):
-                    changed()  # computed values may depend on props
+                if self._rw_runtime is not None and not values_equal(getattr(self, name, None), fresh.__dict__[name]):
+                    self._rw_runtime.changes += 1  # computed values may depend on props
                 setattr(self, name, fresh.__dict__[name])
         self.children = fresh.children
         self.style = fresh.style

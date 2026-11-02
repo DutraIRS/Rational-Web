@@ -6,7 +6,18 @@ from pydantic import BaseModel
 
 from rational import App, Button, Component, FieldError, Form, Input, Page, State, Text, _http
 from rational.backend import Service, remote
-from rational.bots import HONEYPOT, STARTED, Captcha, HumanCheck, Limiter, NotHuman, TooManyRequests, human, limit
+from rational.bots import (
+    HONEYPOT,
+    STARTED,
+    Captcha,
+    HumanCheck,
+    Limiter,
+    NotHuman,
+    TooManyRequests,
+    _signer,
+    human,
+    limit,
+)
 from rational.context import Context
 from rational.stores import MemorySessionDriver, RedisSessionDriver
 from rational.testing import TestClient
@@ -161,7 +172,7 @@ def test_captcha_widget_script_and_policy(monkeypatch):
     app.min_form_seconds = 0
     client = TestClient(app)
     response = client.http.get("/")
-    assert '<div class="cf-turnstile" data-sitekey="site-key">' in response.text
+    assert '<div class="cf-turnstile" data-sitekey="site-key" data-rw-ignore>' in response.text  # re-renders keep it
     assert 'src="https://challenges.cloudflare.com/turnstile/v0/api.js"' in response.text
     policy = response.headers["content-security-policy"]
     assert "frame-src 'self' https://challenges.cloudflare.com;" in policy
@@ -193,7 +204,7 @@ async def test_captcha_providers_and_failures(monkeypatch):
     for provider, field in (("hcaptcha", "h-captcha-response"), ("recaptcha", "g-recaptcha-response")):
         app = App()
         captcha = Captcha(app, provider, site_key="k", secret="s")
-        assert captcha.field == field and app.frame_origins
+        assert captcha.field == field and app.csp_sources["frame-src"]
         with pytest.raises(FieldError) as failed:
             await captcha.verify("token")
         assert failed.value.details == [
@@ -202,3 +213,109 @@ async def test_captcha_providers_and_failures(monkeypatch):
     with pytest.raises(ValueError, match="provider"):
         Captcha(App(), "other", site_key="k", secret="s")  # type: ignore[arg-type]
     assert NotHuman().status == 422
+
+
+def test_the_session_id_stays_out_of_the_page():
+    app = contact_app()
+    client = TestClient(app)
+    page = client.open("/")
+    token = page.dom.find_all("input", name=STARTED)[0].attrs["value"]
+    assert client.http.cookies["rw_sid"] not in str(_signer(app).unsign(token))
+    assert client.http.cookies["rw_sid"] not in client.http.get("/").text
+
+
+def test_a_form_token_works_only_on_the_page_view_it_was_shown_on():
+    app = contact_app()
+    app.min_form_seconds = 0
+    client = TestClient(app)
+    first, second = client.open("/"), client.open("/")
+    from_first = first.dom.find_all("input", name=STARTED)[0].attrs["value"]
+    assert second.submit({"email": "a@x.example", STARTED: from_first}, check=False)["error"]["code"] == "not_human"
+    first.submit({"email": "a@x.example", STARTED: from_first})
+    assert "a@x.example" in first.text
+
+
+def test_a_form_token_of_the_old_format_counts_as_too_old():
+    app = contact_app()
+    page = TestClient(app).open("/")
+    old = _signer(app).sign("sid 123.0")
+    assert "too old" in page.submit({"email": "a@x.example", STARTED: old}, check=False)["error"]["message"]
+
+
+def test_debug_mode_says_what_is_missing_from_the_form():
+    class Bare(Component):
+        @human
+        def send(self, form: Contact):
+            pass
+
+        def render(self):
+            return Form(Input("Email", name="email"), Button("Send", type="submit"), on_submit=self.send)
+
+    app = App(secret_key="k" * 40, debug=True)
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Bare()
+
+    assert "HumanCheck" in TestClient(app).open("/").submit({"email": "a@x"}, check=False)["error"]["message"]
+
+
+def test_captcha_script_loads_only_on_pages_that_use_it():
+    app = contact_app(csp=True)
+
+    @app.page("/plain")
+    class Plain(Page):
+        def render(self):
+            return Text("no form")
+
+    Captcha(app, "hcaptcha", site_key="k", secret="s")
+    client = TestClient(app)
+    plain, form = client.http.get("/plain"), client.http.get("/")
+    assert "hcaptcha" not in plain.text
+    assert 'src="https://js.hcaptcha.com/1/api.js"' in form.text
+    assert '"full":true' in form.text  # client navigation loads this page in full, so the script runs
+    policy = form.headers["content-security-policy"]
+    for directive in ("script-src", "frame-src", "style-src", "connect-src"):
+        assert any(part.startswith(directive) and "https://*.hcaptcha.com" in part for part in policy.split("; "))
+
+
+def test_too_many_requests_says_when_to_come_back():
+    class Api(Service):
+        @remote
+        @limit("1/hour")
+        async def ping(self) -> dict:
+            return {}
+
+    app = App(secret_key="k" * 40)
+    app.service(Api)
+
+    @app.page("/limited")
+    @limit("1/hour")
+    class Limited(Page):
+        def render(self):
+            return Text("ok")
+
+    client = TestClient(app)
+    client.http.post("/api/api/ping", json={})
+    refused = client.http.post("/api/api/ping", json={})
+    assert refused.status_code == 429 and int(refused.headers["retry-after"]) > 0
+    client.http.get("/limited")
+    refused = client.http.get("/limited")
+    assert refused.status_code == 429 and int(refused.headers["retry-after"]) > 0
+
+
+async def test_limit_keys_fit_any_driver_and_hide_session_ids():
+    driver = MemorySessionDriver()
+    app = App()
+    context = Context(app)
+    context.session["x"] = 1
+
+    @limit("5/minute", per="session")
+    def target():
+        pass
+
+    target.__qualname__ = "t" * 300
+    await Limiter(driver).check(target, context)
+    (key,) = driver._items
+    assert len(key) < 255 and context.session.id not in key

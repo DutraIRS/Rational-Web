@@ -30,7 +30,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from email.message import EmailMessage
 from email.utils import make_msgid, parseaddr
-from html import unescape
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -72,6 +71,11 @@ class Email(BaseModel):
                 raise ValueError("must be a single line")
         return value
 
+    @property
+    def domain(self) -> str:
+        """The sender's domain. It names this machine too: asking DNS for its real name can hang."""
+        return parseaddr(self.sender)[1].rpartition("@")[2] or "localhost"
+
     def message(self) -> EmailMessage:
         """The message as a standard-library ``EmailMessage`` (text and HTML alternatives)."""
         msg = EmailMessage()
@@ -82,9 +86,7 @@ class Email(BaseModel):
         if self.reply_to:
             msg["Reply-To"] = self.reply_to
         msg["Subject"] = self.subject
-        # The sender's domain: make_msgid() alone looks the machine's name up in DNS, which can hang.
-        domain = parseaddr(self.sender)[1].rpartition("@")[2] or "localhost"
-        msg["Message-ID"] = make_msgid(domain=domain)
+        msg["Message-ID"] = make_msgid(domain=self.domain)
         msg.set_content(self.text)
         msg.add_alternative(self.html, subtype="html")
         return msg
@@ -123,9 +125,11 @@ class SMTP:
         context = ssl.create_default_context()
         server: smtplib.SMTP
         if self.security == "tls":
-            server = smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout, context=context)
+            server = smtplib.SMTP_SSL(
+                self.host, self.port, local_hostname=email.domain, timeout=self.timeout, context=context
+            )
         else:
-            server = smtplib.SMTP(self.host, self.port, timeout=self.timeout)
+            server = smtplib.SMTP(self.host, self.port, local_hostname=email.domain, timeout=self.timeout)
         with server:
             if self.security == "starttls":
                 server.starttls(context=context)
@@ -142,7 +146,11 @@ class Resend:
 
     async def send(self, email: Email) -> None:
         body: dict[str, Any] = {"from": email.sender, "to": email.to, "subject": email.subject}
-        body |= {"html": email.html, "text": email.text, "cc": email.cc, "bcc": email.bcc}
+        body |= {"html": email.html, "text": email.text}
+        if email.cc:
+            body["cc"] = email.cc
+        if email.bcc:
+            body["bcc"] = email.bcc
         if email.reply_to:
             body["reply_to"] = email.reply_to
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -172,12 +180,16 @@ class Postmark:
 class Console:
     """Logs each message instead of sending it (development)."""
 
+    instant = True  # nothing to wait for
+
     async def send(self, email: Email) -> None:
         log.warning("email to %s: %s\n\n%s", ", ".join(email.to), email.subject, email.text)
 
 
 class Memory:
     """Keeps each message in ``outbox`` instead of sending it (tests)."""
+
+    instant = True  # nothing to wait for
 
     def __init__(self) -> None:
         self.outbox: list[Email] = []
@@ -217,6 +229,11 @@ class Mailer:
             await self._deliver.enqueue(email.model_dump())
         else:
             await self.backend.send(email)
+
+    @property
+    def waits(self) -> bool:
+        """Whether ``send`` waits for a mail server, rather than queueing a job or finishing at once."""
+        return self._deliver is None and not getattr(self.backend, "instant", False)
 
     async def compose(
         self,
@@ -274,7 +291,6 @@ class _Tree(Component):
 async def render_email(app: App, body: Component | Node, subject: str) -> str:
     """``body`` as a complete HTML email, its styles inlined and theme values filled in."""
     from .context import Context
-    from .pages import _without_component_ids
     from .runtime import PageRuntime
 
     sheet = _InlineSheet(app.compiler)
@@ -291,7 +307,10 @@ async def render_email(app: App, body: Component | Node, subject: str) -> str:
                 break
         return css
 
-    root = _inline(_without_component_ids(await runtime.render_page()), sheet.declarations, resolve)
+    try:
+        root = _inline(await runtime.render_page(), sheet.declarations, resolve)
+    finally:
+        runtime.dispose()
     body_style = resolve("margin:0;padding:24px;background:var(--rw-color-background);")
     body_style += resolve("color:var(--rw-color-on-background);font-family:var(--rw-font-body)")
     return (
@@ -308,7 +327,9 @@ def _inline(node: Any, declarations: dict[str, str], resolve: Callable[[str], st
     classes = str(node.attr("class") or "").split()
     styles = "".join(declarations.get(c, "") for c in classes)
     rest = [c for c in classes if c not in declarations]
-    attrs = [(n, v) for n, v in node.attrs if n not in ("class", "style")]
+    attrs = [
+        (n, v) for n, v in node.attrs if n not in ("class", "style") and not n.startswith("data-rw-")
+    ]  # no runtime
     if rest:
         attrs.insert(0, ("class", " ".join(rest)))
     if styles or node.attr("style"):
@@ -358,5 +379,6 @@ def html_to_text(html: str) -> str:
     """A readable plain-text version of an HTML message: paragraphs kept, links written out."""
     parser = _Text()
     parser.feed(html)
-    lines = (line.strip() for line in unescape("".join(parser.parts)).splitlines())
+    parser.close()
+    lines = (line.strip() for line in "".join(parser.parts).splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip() + "\n"

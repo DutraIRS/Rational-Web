@@ -84,7 +84,12 @@ def Text(  # noqa: N802 - primitives are capitalized like components
     **attrs: Any,
 ) -> Node:
     """A run of text. ``content`` may include callables, evaluated now."""
-    own = Style(font_size=size, font_weight=weight, color="muted" if muted else color, text_align=align)
+    plain = not muted and size is weight is color is align is None  # by far the most common: skip building a Style
+    own = (
+        None
+        if plain
+        else Style(font_size=size, font_weight=weight, color="muted" if muted else color, text_align=align)
+    )
     return h(tag, *content, key=key, style=merge(TEXT, own, style), **attrs)
 
 

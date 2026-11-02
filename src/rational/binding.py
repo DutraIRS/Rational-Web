@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import functools
 import inspect
+import logging
 import typing
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .errors import InvalidInput
 from .events import Event
+
+log = logging.getLogger("rational")
 
 
 class EventValidationError(InvalidInput):
@@ -35,45 +39,73 @@ def _message(err: Any) -> str:
     return str(err["msg"])
 
 
-def check_signature(handler: Callable[..., Any]) -> None:
-    """A handler takes at most one *required* positional parameter (the payload).
+@dataclass(frozen=True)
+class _Shape:
+    """What binding needs to know about a handler: inspecting one on every render would be slow."""
 
-    Defaulted positional parameters are the documented idiom for capturing values in
-    lambdas (``lambda i=i: ...``), so they are not counted; ``*args`` is rejected.
-    """
+    problem: str | None = None  # why it cannot be a handler
+    takes_payload: bool = False
+    annotation: Any = Any
+
+
+_shapes: dict[tuple[Any, ...], _Shape] = {}
+
+
+def _shape(handler: Callable[..., Any]) -> _Shape:
+    func = getattr(handler, "__func__", handler)
+    code = getattr(func, "__code__", None)
+    if code is None:
+        return _inspect(handler, func)
+    # By code object: lambdas recreated on every render share a shape. A decorator's wrappers all
+    # have one code object too, so what they wrap counts as well.
+    key = (code, getattr(inspect.unwrap(func), "__code__", None), func is not handler)
+    shape = _shapes.get(key)
+    if shape is None:
+        shape = _shapes[key] = _inspect(handler, func)
+    return shape
+
+
+def _inspect(handler: Callable[..., Any], func: Callable[..., Any]) -> _Shape:
+    """Defaulted positional parameters are the documented idiom for capturing values in lambdas
+    (``lambda i=i: ...``), so only a required one receives the payload."""
     try:
-        sig = inspect.signature(handler)
+        parameters = inspect.signature(handler).parameters.values()
     except (TypeError, ValueError):
-        return
-    for p in sig.parameters.values():
-        if p.kind is p.VAR_POSITIONAL:
-            raise TypeError(f"event handler {handler!r} must not take *args")
+        return _Shape()
+    if any(p.kind is p.VAR_POSITIONAL for p in parameters):
+        return _Shape("must not take *args")
     required = [
-        p
-        for p in sig.parameters.values()
-        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
+        p for p in parameters if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
     ]
     if len(required) > 1:
-        raise TypeError(f"event handler {handler!r} must take at most one argument (the value/form/event)")
+        return _Shape("must take at most one argument (the value/form/event)")
+    if not required:
+        return _Shape()
+    return _Shape(takes_payload=True, annotation=_annotation(func, required[0].name))
 
 
-def _payload_param(handler: Callable[..., Any]) -> inspect.Parameter | None:
-    """The required positional parameter that receives the payload, if there is one."""
+def _annotation(func: Callable[..., Any], name: str) -> Any:
     try:
-        sig = inspect.signature(handler)
-    except (TypeError, ValueError):
-        return None
-    for p in sig.parameters.values():
-        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty:
-            return p
-    return None
+        return typing.get_type_hints(func).get(name, Any)
+    except NameError as e:  # an annotation that only exists for type checkers, or a local class
+        log.warning("%r takes unvalidated input: its annotations cannot be resolved (%s)", func, e)
+    except Exception:  # no annotations to read: a callable object, say
+        pass
+    return Any
+
+
+def check_signature(handler: Callable[..., Any]) -> None:
+    """A handler takes at most one *required* positional parameter (the payload), and no ``*args``."""
+    problem = _shape(handler).problem
+    if problem is not None:
+        raise TypeError(f"event handler {handler!r} {problem}")
 
 
 def bind_payload(handler: Callable[..., Any], event: str, payload: dict[str, Any]) -> list[Any]:
-    param = _payload_param(handler)
-    if param is None:
+    shape = _shape(handler)
+    if not shape.takes_payload:
         return []
-    annotation = _annotation(getattr(handler, "__func__", handler), param.name)
+    annotation = shape.annotation
     if annotation is Event:
         return [
             Event(name=event, value=payload.get("value"), key=payload.get("key"), form=dict(payload.get("form") or {}))
@@ -87,23 +119,6 @@ def bind_payload(handler: Callable[..., Any], event: str, payload: dict[str, Any
         return [_adapter(annotation).validate_python(raw)]
     except ValidationError as exc:
         raise EventValidationError(exc) from None
-
-
-_hints_by_code: dict[Any, dict[str, Any]] = {}
-
-
-def _annotation(func: Callable[..., Any], name: str) -> Any:
-    # Keyed by code object: lambdas recreated on every render share their hints.
-    code = getattr(func, "__code__", None)
-    hints = _hints_by_code.get(code) if code is not None else None
-    if hints is None:
-        try:
-            hints = typing.get_type_hints(func)
-        except Exception:
-            hints = {}
-        if code is not None:
-            _hints_by_code[code] = hints
-    return hints.get(name, Any)
 
 
 @functools.lru_cache(maxsize=1024)

@@ -43,19 +43,6 @@ current_frame: ContextVar[Frame | None] = ContextVar("rational_frame", default=N
 reads: ContextVar[set[Cell] | None] = ContextVar("rational_reads", default=None)
 
 
-class _Version:
-    """Bumped on every change a computed value could depend on (state, session data, props)."""
-
-    value = 0
-
-
-version = _Version()
-
-
-def changed() -> None:
-    version.value += 1
-
-
 def track_read(cell: Cell) -> None:
     frame = current_frame.get()
     if frame is not None:

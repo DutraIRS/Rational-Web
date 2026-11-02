@@ -1,4 +1,4 @@
-"""``Router``: declare pages and services in their own modules, compose them in one place.
+"""``Router``: declare pages, sockets and services in their own modules, compose them in one place.
 
 Like FastAPI's ``APIRouter`` or Flask's blueprints, a router only *records* what it is
 given; ``App.include(router)`` registers everything. Modules never need to import the app
@@ -19,10 +19,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .component import Page
-from .pages import PathValues
+
+if TYPE_CHECKING:
+    from .pages import PathValues
 
 P = TypeVar("P", bound=type[Page])
 T = TypeVar("T", bound=type)
@@ -42,7 +44,9 @@ class Router:
     prefix: str = ""
     pages: list[PageEntry] = field(default_factory=list)
     services: list[type] = field(default_factory=list)
+    sockets: list[tuple[str, type]] = field(default_factory=list)
     startup: list[Callable[[], Any]] = field(default_factory=list)
+    shutdown: list[Callable[[], Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.prefix = "/" + self.prefix.strip("/") if self.prefix.strip("/") else ""
@@ -63,6 +67,15 @@ class Router:
 
         return decorator
 
+    def socket(self, path: str) -> Callable[[T], T]:
+        """Record a ``Socket`` class at ``path`` (relative to the router's prefix); see ``App.socket``."""
+
+        def decorator(cls: T) -> T:
+            self.sockets.append((join(self.prefix, path), cls))
+            return cls
+
+        return decorator
+
     def service(self, cls: T) -> T:
         """Record a ``Service`` to expose its ``@remote`` methods."""
         self.services.append(cls)
@@ -72,11 +85,17 @@ class Router:
         self.startup.append(fn)
         return fn
 
+    def on_shutdown(self, fn: Callable[[], Any]) -> Callable[[], Any]:
+        self.shutdown.append(fn)
+        return fn
+
     def include(self, other: Router) -> None:
         """Merge another router's records into this one, under this router's prefix."""
         self.pages.extend(PageEntry(join(self.prefix, e.path), e.page, e.title, e.auth, e.paths) for e in other.pages)
+        self.sockets.extend((join(self.prefix, path), cls) for path, cls in other.sockets)
         self.services.extend(other.services)
         self.startup.extend(other.startup)
+        self.shutdown.extend(other.shutdown)
 
 
 def join(prefix: str, path: str) -> str:

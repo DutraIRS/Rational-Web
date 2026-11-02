@@ -22,13 +22,14 @@ def escape_attr(value: str) -> str:
     return value.translate(_ATTR_ESCAPES)
 
 
-def to_html(node: Any) -> str:
+def to_html(node: Any, *, component_ids: bool = True) -> str:
+    """``component_ids=False`` leaves out the markers meant for the browser runtime."""
     parts: list[str] = []
-    _write(node, parts)
+    _write(node, parts, component_ids)
     return "".join(parts)
 
 
-def _write(node: Any, out: list[str]) -> None:
+def _write(node: Any, out: list[str], component_ids: bool) -> None:
     if isinstance(node, TextNode):
         out.append(escape_text(node.text))
     elif isinstance(node, RawHTML):
@@ -39,7 +40,7 @@ def _write(node: Any, out: list[str]) -> None:
         out.append("<")
         out.append(node.tag)
         for name, value in node.attrs:
-            if value is None or value is False:
+            if value is None or value is False or (name == "data-rw-c" and not component_ids):
                 continue
             if value is True:
                 out.append(f" {name}")
@@ -51,10 +52,10 @@ def _write(node: Any, out: list[str]) -> None:
                 raise ValueError(f"<{node.tag}> cannot have children")
             return
         for child in node.children:
-            _write(child, out)
+            _write(child, out, component_ids)
         out.append(f"</{node.tag}>")
     elif isinstance(node, (list, tuple)):
         for child in node:
-            _write(child, out)
+            _write(child, out, component_ids)
     else:
         raise TypeError(f"cannot serialize {type(node).__name__}; render it through the Renderer")

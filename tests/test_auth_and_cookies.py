@@ -1,20 +1,25 @@
 """Passwords, JSON Web Tokens, signing, encryption and app cookies."""
 
 import base64
+import hashlib
 import json
 import time
 
 import pytest
 
-from rational import App, Page, Text
+from rational import App, Button, Page, Text
 from rational.backend import Service, remote
+from rational.context import Context
 from rational.security import (
     Box,
     InvalidToken,
     Signer,
     Tokens,
+    ahash_password,
+    averify_password,
     hash_password,
     password_needs_rehash,
+    same_text,
     verify_password,
 )
 from rational.testing import TestClient
@@ -161,3 +166,96 @@ def test_bearer_tokens_sign_api_callers_in():
     assert ok.json() == {"id": "7"}
     bad = client.http.get("/api/me/whoami", headers={"Authorization": "Bearer nope"})
     assert bad.status_code == 401
+
+
+def test_a_password_for_nobody_is_refused_after_the_same_work(monkeypatch):
+    calls = []
+    real = hashlib.scrypt
+    monkeypatch.setattr(hashlib, "scrypt", lambda *args, **kwargs: calls.append(kwargs) or real(*args, **kwargs))
+    assert verify_password("anything", None) is False
+    assert len(calls) == 1 and calls[0]["n"] == 2**14  # what checking a real password costs
+
+
+async def test_the_async_versions_keep_the_event_loop_free():
+    stored = await ahash_password("correct horse")
+    assert await averify_password("correct horse", stored)
+    assert not await averify_password("wrong", stored)
+    assert not await averify_password("x", None)
+
+
+def test_passwords_hashed_with_stronger_settings_still_verify_and_get_rehashed():
+    salt = b"s" * 16
+    strong = hashlib.scrypt(b"pw", salt=salt, n=2**15, r=8, p=1, maxmem=256 * 1024 * 1024)
+    stored = f"scrypt${2**15}$8$1${salt.hex()}${strong.hex()}"
+    assert verify_password("pw", stored) and password_needs_rehash(stored)
+
+
+def test_strange_stored_hashes_and_passwords_are_just_wrong():
+    assert not verify_password("x", f"scrypt${2**80}$8$1$aa$bb")
+    assert not verify_password("x", "scrypt$abc$8$1$aa$bb")
+    assert verify_password("\ud800 lone surrogate", hash_password("\ud800 lone surrogate"))
+
+
+@pytest.mark.parametrize("forged", ["payload.é", "é.é", "a.\u202e"])
+def test_forged_values_with_non_ascii_characters_are_refused_not_a_crash(forged):
+    with pytest.raises(InvalidToken):
+        Signer(SECRET).unsign(forged)
+    with pytest.raises(InvalidToken):
+        Tokens(SECRET).verify(f"{_jwt_header()}.e30.{forged}")
+
+
+def _jwt_header():
+    return base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=").decode()
+
+
+def test_same_text_compares_any_text():
+    assert same_text("é", "é") and not same_text("é", "e") and not same_text("a", "é")
+
+
+def test_a_csrf_header_with_non_ascii_bytes_is_refused_not_a_crash():
+    app = App()
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Button("Go", on_click=lambda: None)
+
+    client = TestClient(app)
+    page = client.open("/")
+    body = {"v": 1, "page": page.manifest["page"], "rev": 0, "handler": "c0.1", "payload": {}}
+    reply = client.http.post("/_rational/event", json=body, headers={"x-rw-csrf": b"\xc3\xa9"})
+    assert reply.status_code == 403 and reply.json()["error"]["code"] == "csrf"
+
+
+def test_tokens_honour_a_zero_lifetime():
+    payload = Tokens(SECRET).issue("ada", ttl=0).split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert claims["exp"] == claims["iat"]  # not the default lifetime
+
+
+def test_every_rw_cookie_name_belongs_to_the_framework():
+    context = Context(App(secret_key=SECRET))
+    for name in ("rw_sid", "rw_oauth", "rw_anything"):
+        with pytest.raises(ValueError, match="framework"):
+            context.cookies.set(name, "x")
+    with pytest.raises(ValueError, match="framework"):
+        context.cookies.delete("rw_oauth")
+
+
+def test_encrypted_cookies_follow_key_rotation(monkeypatch):
+    pytest.importorskip("cryptography")
+    old = App(secret_key="o" * 40).box("purpose").seal({"n": 1})
+    monkeypatch.setenv("RATIONAL_OLD_SECRET_KEYS", f" {'o' * 40} , ")
+    assert App(secret_key="n" * 40).box("purpose").open(old) == {"n": 1}
+
+
+def test_a_forged_signed_cookie_with_non_ascii_bytes_reads_as_missing():
+    app = App(secret_key=SECRET)
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Text(f"cart={self.context.cookies.get('cart', signed=True, default='none')}")
+
+    reply = TestClient(app).http.get("/", headers={"cookie": "cart=abc.é".encode()})
+    assert reply.status_code == 200 and "cart=none" in reply.text

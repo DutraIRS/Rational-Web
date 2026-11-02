@@ -286,19 +286,14 @@ class StyleSheet:
     def __init__(self, compiler: StyleCompiler) -> None:
         self.compiler = compiler
         self._seen: set[str] = set()
-        self._rules: list[str] = []
         self._pending: list[str] = []
 
     def use(self, style: Style) -> str:
         compiled = self.compiler.compile(style)
         if compiled.class_name not in self._seen:
             self._seen.add(compiled.class_name)
-            self._rules.extend(compiled.rules)
             self._pending.extend(compiled.rules)
         return compiled.class_name
-
-    def css(self) -> str:
-        return "".join(self._rules)
 
     def drain(self) -> list[str]:
         """Rules added since the last drain (to ship with an event response)."""
