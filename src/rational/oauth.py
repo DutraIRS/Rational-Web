@@ -19,6 +19,9 @@ person is, calls ``on_login`` and signs the returned principal in with ``session
 The request carries a one-time ``state`` (against cross-site request forgery), a ``nonce`` and a
 PKCE challenge, so an intercepted code is useless. The identity is read from the provider over
 HTTPS rather than from a token the browser could have touched.
+
+Match people by ``person.id``. Email addresses can change hands, and only trust one when
+``person.email_verified`` is true (Microsoft does not report it, so it is false there).
 """
 
 from __future__ import annotations
@@ -39,8 +42,9 @@ from fastapi import Request, Response
 from fastapi.responses import RedirectResponse
 
 from . import _http
+from .errors import RationalError
 from .http import base_path, local_path
-from .security import InvalidToken
+from .security import InvalidToken, _b64, same_text
 
 if TYPE_CHECKING:
     from .app import App
@@ -69,7 +73,7 @@ class Provider:
 
     name: str
     client_id: str
-    client_secret: str
+    client_secret: str = field(repr=False)
     scopes: tuple[str, ...]
     authorize_url: str = ""
     token_url: str = ""
@@ -88,9 +92,8 @@ class Provider:
         if self.authorize_url or self.issuer is None:
             return
         config = await _http.request("GET", f"{self.issuer.rstrip('/')}/.well-known/openid-configuration")
-        self.authorize_url = config["authorization_endpoint"]
-        self.token_url = config["token_endpoint"]
-        self.userinfo_url = config["userinfo_endpoint"]
+        endpoints = config["authorization_endpoint"], config["token_endpoint"], config["userinfo_endpoint"]
+        self.authorize_url, self.token_url, self.userinfo_url = endpoints  # all of them, or none
 
     async def user(self, access_token: str) -> OAuthUser:
         info = await _http.request("GET", self.userinfo_url, headers={"Authorization": f"Bearer {access_token}"})
@@ -112,7 +115,7 @@ class GitHub(Provider):
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
         info = await _http.request("GET", "https://api.github.com/user", headers=headers)
         emails = await _http.request("GET", "https://api.github.com/user/emails", headers=headers)
-        primary = next((e for e in emails if e.get("primary") and e.get("verified")), None)
+        primary = next((e for e in emails if isinstance(e, dict) and e.get("primary") and e.get("verified")), None)
         return OAuthUser(
             provider=self.name,
             id=str(info["id"]),
@@ -168,9 +171,6 @@ class Apple(Provider):
     signed with the private key of a Services ID, generated for every token request.
     """
 
-    pkce = False
-    response_mode = "form_post"
-
     def __init__(
         self, *, client_id: str, team_id: str, key_id: str, private_key: str, scopes: tuple[str, ...] = ()
     ) -> None:
@@ -181,13 +181,13 @@ class Apple(Provider):
             ("openid", "name", "email", *scopes),
             authorize_url="https://appleid.apple.com/auth/authorize",
             token_url="https://appleid.apple.com/auth/token",
+            pkce=False,
+            response_mode="form_post",
         )
-        self.pkce = False  # the dataclass defaults (PKCE on, redirect response) do not apply
-        self.response_mode = "form_post"
         self.team_id = team_id
         self.key_id = key_id
         self.private_key = private_key
-        self.secret_lifetime = 15777000  # 183 days; Apple rejects secrets valid beyond six months
+        self.secret_lifetime = 300  # seconds: each token request gets a fresh one
 
     def secret(self) -> str:
         try:
@@ -207,17 +207,13 @@ class Apple(Provider):
             "aud": "https://appleid.apple.com",
             "sub": self.client_id,
         }
-        b64 = _b64url
-        signing_input = (
-            b64(json.dumps(header, separators=(",", ":")).encode())
-            + "."
-            + b64(json.dumps(payload, separators=(",", ":")).encode())
-        )
+        signing_input = ".".join(_b64(json.dumps(part, separators=(",", ":")).encode()) for part in (header, payload))
         key = serialization.load_pem_private_key(self.private_key.encode(), password=None)
-        assert isinstance(key, ec.EllipticCurvePrivateKey)  # Apple keys are EC P-256
+        if not isinstance(key, ec.EllipticCurvePrivateKey):
+            raise TypeError("Sign in with Apple needs the EC P-256 key of a Services ID")
         der = key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256()))
         r, s = decode_dss_signature(der)  # a JWT carries the raw r || s, not DER (RFC 7518, 3.4)
-        return signing_input + "." + _b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+        return signing_input + "." + _b64(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
 
     def from_id_token(self, id_token: str, *, nonce: str, form_user: str | None = None) -> OAuthUser:
         """Who signed in, from the ID token the token endpoint returned.
@@ -234,9 +230,9 @@ class Apple(Provider):
         if form_user:  # first sign-in only: the person's name arrives as a form field
             try:
                 person = json.loads(form_user).get("name", {})
-                name = " ".join(p for p in (person.get("firstName"), person.get("lastName")) if p)
-            except ValueError:
-                pass
+                name = " ".join(p for p in (person.get("firstName"), person.get("lastName")) if p) or None
+            except (ValueError, TypeError, AttributeError):
+                pass  # it is only a name, and the browser could have sent anything
         return OAuthUser(
             provider=self.name,
             id=str(claims["sub"]),
@@ -252,12 +248,10 @@ def _id_token_claims(id_token: str) -> dict[str, Any]:
     parts = id_token.split(".")
     if len(parts) != 3:
         raise ValueError("malformed ID token")
-    claims: dict[str, Any] = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    if not isinstance(claims, dict):
+        raise ValueError("malformed ID token")
     return claims
-
-
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
 def apple(*, client_id: str, team_id: str, key_id: str, private_key: str, scopes: tuple[str, ...] = ()) -> Apple:
@@ -305,7 +299,10 @@ class OAuth:
         chosen = self.providers.get(provider)
         if chosen is None:
             return self._fail(request, 404, "Unknown sign-in provider")
-        await chosen.endpoints()
+        try:
+            await chosen.endpoints()
+        except (_http.HTTPError, KeyError, TypeError):
+            return self._fail(request, 502, f"Could not sign in with {provider}; please try again")
         verifier = secrets.token_urlsafe(48)
         flow = {
             "provider": provider,
@@ -314,7 +311,7 @@ class OAuth:
             "verifier": verifier,
             "next": local_path(request.query_params.get("next"), self.after),
         }
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        challenge = _b64(hashlib.sha256(verifier.encode()).digest())
         params = {
             "response_type": "code",
             "client_id": chosen.client_id,
@@ -338,9 +335,9 @@ class OAuth:
             _FLOW_COOKIE,
             self.app.signer("rational.oauth.flow").sign(flow),
             max_age=int(_FLOW_TTL),
-            path=self.path,
+            path=base_path(request) + self.path,
             httponly=True,
-            secure=cross_site or self._secure(request),
+            secure=cross_site or self.app.cookie_secure(request),
             samesite="none" if cross_site else "lax",
         )
         return response
@@ -354,25 +351,24 @@ class OAuth:
         ctx = await self.app.context_for(request)
         async with self.app.session_lock(ctx):
             response = await self._complete(request, provider, ctx, flow)
-        response.delete_cookie(_FLOW_COOKIE, path=self.path)  # one use, even when signing in fails
+        response.delete_cookie(_FLOW_COOKIE, path=base_path(request) + self.path)  # one use, even when signing in fails
         await self.app.finish(request, response, ctx)
         return response
-
-    def _secure(self, request: Request) -> bool:
-        return self.app.secure_cookies if self.app.secure_cookies is not None else request.url.scheme == "https"
 
     async def _complete(self, request: Request, provider: str, ctx: Context, flow: Any) -> Response:
         chosen = self.providers.get(provider)
         form_user = None
         if request.method == "POST":  # Apple answers with a form post, not a redirect
-            body = (await request.body()).decode()
+            if chosen is None or chosen.response_mode != "form_post":
+                return self._fail(request, 405, "This sign-in link is not valid; please start again")
+            body = (await request.body()).decode("utf-8", "replace")
             query = {k: v[0] for k, v in parse_qs(body).items()}
             form_user = query.get("user")
         else:
             query = dict(request.query_params)
         if chosen is None or not isinstance(flow, dict) or flow.get("provider") != provider:
             return self._fail(request, 400, "This sign-in link is not valid; please start again")
-        if not secrets.compare_digest(str(query.get("state", "")), str(flow["state"])):
+        if not same_text(str(query.get("state", "")), str(flow["state"])):
             return self._fail(request, 400, "This sign-in link is not valid; please start again")
         if "error" in query or "code" not in query:
             return self._fail(request, 400, "Sign-in was cancelled")
@@ -393,11 +389,14 @@ class OAuth:
                 person = chosen.from_id_token(tokens["id_token"], nonce=flow["nonce"], form_user=form_user)
             else:
                 person = await chosen.user(tokens["access_token"])
-        except (_http.HTTPError, KeyError, TypeError, ValueError):
+        except (_http.HTTPError, KeyError, TypeError, ValueError, AttributeError):  # a service's unexpected answer
             return self._fail(request, 502, f"Could not sign in with {provider}; please try again")
-        principal = self.on_login(ctx, person)
-        if inspect.isawaitable(principal):
-            principal = await principal
+        try:
+            principal = self.on_login(ctx, person)
+            if inspect.isawaitable(principal):
+                principal = await principal
+        except RationalError as e:
+            return self._fail(request, e.status, e.message)
         if principal is None:
             return self._fail(request, 403, "This account cannot sign in here")
         ctx.session.login(principal)

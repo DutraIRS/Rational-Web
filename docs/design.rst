@@ -1,8 +1,8 @@
 Design
 ======
 
-This page records how the v0.1 specification (``ideas/``) was matured into an
-implementation: the open questions it left, and the decisions taken.
+This page records how the v0.1 specification was matured into an implementation: the open
+questions it left, and the decisions taken.
 
 Principles
 ----------
@@ -96,9 +96,10 @@ mismatch; ``429`` the rate limit. An unknown handler answers with ``error.code =
 Known limitations
 -----------------
 
-* Server-held page state requires one process or sticky sessions.
+* Server-held page state requires one process, sticky sessions or page snapshots.
 * Unkeyed siblings of the same class in conditional branches can swap state: use ``key=``.
 * ``js.*`` changes survive a server re-render unless the server changes that same attribute or
   replaces the element (with ``fine_patches=False`` they are reset).
 * Mounted sub-applications do not receive lifespan events, so ``on_startup`` hooks of a
-  mounted ``App`` must be called by the host application.
+  mounted ``App`` must be called by the host application, and its expired pages are only let go
+  of when the next ones push them out (``max_pages``).

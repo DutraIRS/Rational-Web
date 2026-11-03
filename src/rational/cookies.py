@@ -16,9 +16,10 @@ from .security import Box, InvalidToken, Signer
 if TYPE_CHECKING:
     from fastapi import Response
 
+    from .app import App
     from .context import Context
 
-RESERVED = frozenset({"rw_sid", "rw_theme", "rw_lang"})
+RESERVED_PREFIX = "rw_"  # rw_sid, rw_theme, rw_lang, rw_oauth...
 
 
 @dataclass(frozen=True)
@@ -37,9 +38,9 @@ class Cookies:
         self._context = context
         self._pending: dict[str, _Pending] = {}
 
-    def _incoming(self) -> dict[str, str]:
+    def _incoming(self, name: str) -> str | None:
         request = self._context.request
-        return dict(request.cookies) if request is not None else {}
+        return request.cookies.get(name) if request is not None else None
 
     def get(
         self,
@@ -52,7 +53,7 @@ class Cookies:
     ) -> Any:
         """The cookie's value, or ``default`` if it is missing, forged or (``max_age``) too old."""
         pending = self._pending.get(name)
-        raw = pending.value if pending is not None else self._incoming().get(name)
+        raw = pending.value if pending is not None else self._incoming(name)
         if raw is None:
             return default
         if not (signed or encrypted):
@@ -75,7 +76,7 @@ class Cookies:
         path: str = "/",
     ) -> None:
         """Set a cookie on the response. ``value`` is text, or any JSON data when signed or encrypted."""
-        if name in RESERVED:
+        if name.startswith(RESERVED_PREFIX):
             raise ValueError(f"{name!r} is used by the framework; pick another cookie name")
         if signed or encrypted:
             text = self._box().seal(value) if encrypted else self._signer().sign(value)
@@ -86,7 +87,7 @@ class Cookies:
         self._pending[name] = _Pending(text, max_age, httponly, samesite, path)
 
     def delete(self, name: str, *, path: str = "/") -> None:
-        if name in RESERVED:
+        if name.startswith(RESERVED_PREFIX):
             raise ValueError(f"{name!r} is used by the framework")
         self._pending[name] = _Pending(None, None, True, "lax", path)
 
@@ -105,21 +106,14 @@ class Cookies:
                     path=c.path,
                 )
 
-    def _old(self) -> tuple[str, ...]:
-        app = self._context.app
-        return app._old_secret_keys if app is not None else ()
-
     def _signer(self) -> Signer:
-        app = self._context.app
-        if app is not None:
-            return app.signer("rational.cookie")
-        return Signer(self._secret(), salt="rational.cookie")
+        return self._app().signer("rational.cookie")
 
     def _box(self) -> Box:
-        return Box(self._secret(), salt="rational.cookie", extra_secrets=self._old())
+        return self._app().box("rational.cookie")
 
-    def _secret(self) -> str:
+    def _app(self) -> App:
         app = self._context.app
         if app is None:
             raise RuntimeError("signed and encrypted cookies need an App")
-        return app.secret_key
+        return app

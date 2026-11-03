@@ -6,6 +6,95 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0a2] - 2026-11-02
+
+A full audit: fixes for what it found, and the features it found half done. Three of the bugs
+(a Redis bus that could hang the server, sockets subscribing twice, the session id in form pages)
+came with changes that were never released.
+
+### Security
+- Signed values, tokens, Stripe signatures and OAuth states with non-ASCII characters are refused
+  instead of causing a 500 (`rational.security.same_text`).
+- Request bodies are limited: `App(max_request_bytes=...)`, 10 MiB by default, answers 413.
+- A page with `auth="required"` no longer runs events, opens streams or resumes for a visitor who
+  has signed out meanwhile: the browser reloads and goes to the login page.
+- `Socket.auth = "required"` is checked with every message, when the session changes and every
+  `recheck_seconds` (30), so signing out closes the connection, even from another worker.
+- `HumanCheck` binds its token to the page view, so the session id never reaches the page.
+- `verify_password(password, None)` does the same work as a real check, and `Accounts` never waits
+  for a mail server, so timing does not tell who has an account.
+- Cookie names starting with `rw_` are all reserved, `rw_oauth` included. Rate limit keys are hashed,
+  which also keeps session ids out of the store. Provider secrets stay out of `repr`.
+- A WebSocket `Origin` that is not a URL is refused instead of raising.
+
+### Added
+- `ahash_password` and `averify_password`, which hash on a small pool of threads. `Accounts.reset`
+  and the user-platform example use them, so hashing no longer blocks the event loop.
+- `app.csp_sources`: origins to add to the Content-Security-Policy, by directive. hCaptcha now gets
+  the `style-src` and `connect-src` it needs.
+- `Stripe(base_url=...)`, for site paths in `checkout`, `portal` and `checkout_url`.
+- `Router.socket` and `Router.on_shutdown`; `App.box(salt)`; `Retry-After` on 429 for pages and
+  `@remote` methods; `task` and `socket` kinds for `app.on_error`, and `ErrorInfo.context` is now
+  actually set.
+- A browser event refused because the CSRF token changed (a sign-in in another tab) fetches the new
+  token and is sent again, once; one refused because the session changed reloads the page.
+
+### Changed
+- `scrypt` now uses n=2^14, r=8, p=5 (16 MiB per password, an OWASP-listed setting) instead of the
+  128 MiB of n=2^17. Passwords hashed with stronger settings still verify, and
+  `password_needs_rehash` says to upgrade them.
+- `jobs.every()` runs at the start of each interval only: no longer at startup or on every restart.
+- Messages to a `Socket` go through a per-connection queue (`queue_size`, 256). `send` no longer
+  waits for the client, and a client that stops reading is disconnected (1013).
+- The CAPTCHA script loads only on pages with a `HumanCheck`, and client navigation loads those in
+  full. `Captcha` no longer adds to `app.scripts`.
+- `Repository.page` orders by primary key unless told otherwise, so pages cannot repeat rows.
+- `Stripe` and `StripeError` are not importable from `rational` (a change after 0.4.0a1 that was
+  never released): batteries are imported from their modules.
+- Removed `app.frame_origins`, `app.extra_script_origins`, `app.style_origins`, `app.script_origins`,
+  `app.housekeeping`, `http.security_headers`, `StyleSheet.css`, `PageResumer.forget`.
+- The session-mismatch refusal now has the code `session` instead of `forbidden`, so that a handler
+  raising `Forbidden` shows its error.
+
+### Fixed
+- A `Socket` client could block every other member of its room, binary frames closed the connection
+  with an error, and a failing bus could skip `disconnect()`.
+- The Redis bus spun at 100% CPU after the last unsubscribe, lost track of failed subscribes and
+  leaked its client on close. Two joins at once subscribed a room twice.
+- A render that fails after an event answers as a failed event instead of plain text, a `Redirect`
+  or `RationalError` from it works, and the page recovers. Failed `unmount()`s are logged, and
+  `async def unmount` is refused; static pages and failed renders now unmount what they mounted.
+- `If-None-Match` handles lists and `*`, and the document is not built for a 304. Pages for one
+  visitor and pages not served as 200 never answer 304.
+- `url_for` percent-encodes parameters, generators work as `paths=`, and a parameter named like a
+  `Page` setting gets a clear error.
+- Workers and schedules survive a job store outage, `Jobs.stop()` no longer waits out its grace
+  period because of a schedule, and unreadable job records are dropped.
+- Stripe: site paths were prefixed twice under a sub-path, booleans were sent as `True`, an answer
+  without a URL crashed, and customer ids could change the request path.
+- OAuth: a provider that cannot be reached, or that answers nonsense, shows an error page; only
+  form-post providers accept POST callbacks; `on_login` may refuse with a `RationalError`; the flow
+  cookie works under a sub-path; Apple's client secret lasts five minutes and a wrong key type is a
+  clear error.
+- Mail: `html_to_text` decoded entities twice and could drop trailing text, SMTP could hang in DNS
+  naming the machine, Resend got empty recipient lists, and emails kept runtime markers.
+- HTTP helper: nonsense answers and protocol errors raise `HTTPError`, and answers are capped at 8 MiB.
+- `ModelForm(disabled=True)` reaches selects and textareas. `State(query=...)` refuses `nan`/`inf`.
+- A snapshot save that failed earlier no longer looks like another worker moving on, and page-scoped
+  state that no longer fits the code reloads the page, logged without a stack trace.
+- `SQLSessionDriver` stores expiry at full precision, and a failed sweep no longer fails the write.
+- `--dev` and `--prod` no longer hang forever on open streams when stopping
+  (`timeout_graceful_shutdown`), the poller tolerates deleted files, and an import error in the app
+  is not blamed on Alembic.
+
+### Performance
+- Rendering: handler signatures are inspected once per function (a decorator's wrappers no longer
+  share annotations), `Text` skips building an empty `Style`, static pages skip a tree copy.
+- `@computed` values are invalidated by changes on their own page and session, not by every change
+  in the process.
+- Sweeps stop at the first live entry and run once a minute in the background, instead of on every
+  500th page request. `MemoryJobStore.claim` uses a heap. Log records nobody reads are not built.
+
 ## [0.4.0a1] - 2026-10-29
 
 Completes the production batteries: Apple sign-in, Stripe, error hooks, secret-key rotation,

@@ -33,21 +33,23 @@ import hmac
 import inspect
 import json
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from . import _http
-from .http import base_path
-from .security import InvalidToken, Signer
+from .security import InvalidToken, Signer, same_text
 
 if TYPE_CHECKING:
     from .app import App
 
 _API = "https://api.stripe.com"
+_URL_PARAMS = ("success_url", "cancel_url", "return_url")
 log = logging.getLogger("rational.stripe")
 
 
@@ -64,7 +66,12 @@ Handler = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 
 
 class Stripe:
-    """Adds ``{path}/checkout`` and ``{path}/webhook`` routes to ``app``; talks to the REST API."""
+    """Adds ``{path}/checkout`` and ``{path}/webhook`` routes to ``app``; talks to the REST API.
+
+    ``base_url`` is the site's public address, which site paths given as ``success_url``,
+    ``cancel_url`` or ``return_url`` are made absolute with. Without it, ``checkout_url`` uses the
+    address of the request, and ``checkout`` and ``portal`` need absolute URLs.
+    """
 
     def __init__(
         self,
@@ -75,8 +82,10 @@ class Stripe:
         path: str = "/stripe",
         tolerance: float = 300.0,
         api_url: str = _API,
+        base_url: str = "",
     ) -> None:
         self.app = app
+        self.base_url = base_url.rstrip("/")
         self.secret_key = secret_key
         self.webhook_secret = webhook_secret
         self.tolerance = tolerance
@@ -98,25 +107,31 @@ class Stripe:
     def checkout_url(self, **params: Any) -> str:
         """A signed ``href``: clicking it creates the Checkout Session and redirects to Stripe.
 
-        ``success_url``/``cancel_url`` may be site paths; they are made absolute with the request
-        host. ``{CHECKOUT_SESSION_ID}`` in ``success_url`` works as in Stripe's API.
+        ``success_url``/``cancel_url`` may be site paths. ``{CHECKOUT_SESSION_ID}`` in
+        ``success_url`` works as in Stripe's API.
         """
         return f"{self.path}/checkout?c={self._signer.sign(params)}"
 
     async def checkout(self, **params: Any) -> dict[str, Any]:
         """Create a Checkout Session directly (in an event handler, say); returns Stripe's answer."""
-        return dict(await self._call("POST", "/v1/checkout/sessions", form=_stripe_form(params)))
+        form = _stripe_form(self._absolute(params))
+        return dict(await self._call("POST", "/v1/checkout/sessions", form=form))
 
-    async def portal(self, customer: str, *, return_url: str = "") -> dict[str, Any]:
+    async def portal(self, customer: str, *, return_url: str | None = None) -> dict[str, Any]:
         """Create a customer portal session (manage cards, subscriptions, invoices); returns its ``url``."""
-        return dict(
-            await self._call(
-                "POST", "/v1/billing_portal/sessions", form={"customer": customer, "return_url": return_url}
-            )
-        )
+        form = self._absolute({"customer": customer, "return_url": return_url})
+        return dict(await self._call("POST", "/v1/billing_portal/sessions", form=form))
 
     async def customer(self, customer_id: str) -> dict[str, Any]:
-        return dict(await self._call("GET", f"/v1/customers/{customer_id}"))
+        return dict(await self._call("GET", f"/v1/customers/{quote(customer_id, safe='')}"))
+
+    def _absolute(self, params: dict[str, Any], origin: str = "") -> dict[str, Any]:
+        """``params`` with site paths made absolute: Stripe redirects to them from its own site."""
+        origin = self.base_url or origin
+        return {
+            key: origin + value if key in _URL_PARAMS and origin and str(value).startswith("/") else value
+            for key, value in params.items()
+        }
 
     async def _checkout(self, request: Request) -> Response:
         from .pages import error_page
@@ -125,16 +140,12 @@ class Stripe:
             params = dict(self._signer.unsign(str(request.query_params.get("c", "")), max_age=24 * 60 * 60))
         except (InvalidToken, TypeError, ValueError):
             return error_page(self.app, request, 404, "This checkout link is not valid")
-        origin = str(request.base_url).rstrip("/") + base_path(request)
-        for key in ("success_url", "cancel_url"):
-            if key in params and str(params[key]).startswith("/"):
-                params[key] = origin + str(params[key])
         try:
-            session = await self.checkout(**params)
-        except StripeError:
+            session = await self.checkout(**self._absolute(params, str(request.base_url).rstrip("/")))
+            return RedirectResponse(str(session["url"]), status_code=303)
+        except (StripeError, KeyError, TypeError, ValueError):
             log.exception("could not create a Stripe Checkout Session")
             return error_page(self.app, request, 502, "Checkout is not available right now; please try again")
-        return RedirectResponse(str(session["url"]), status_code=303)
 
     async def _webhook(self, request: Request) -> Response:
         payload = await request.body()
@@ -170,11 +181,11 @@ class Stripe:
             age = abs(time.time() - float(timestamp))
         except ValueError:
             raise ValueError("malformed Stripe signature header") from None
-        if not signatures or age > self.tolerance:
+        if not math.isfinite(age) or not signatures or age > self.tolerance:
             raise ValueError("the Stripe signature is stale or missing")
         signed = f"{timestamp}.".encode() + payload
         expected = hmac.new(self.webhook_secret.encode(), signed, hashlib.sha256).hexdigest()
-        if not any(hmac.compare_digest(expected, signature) for signature in signatures):
+        if not any(same_text(expected, signature) for signature in signatures):
             raise ValueError("the Stripe signature does not match this payload")
         event: dict[str, Any] = json.loads(payload)
         return event
@@ -204,6 +215,8 @@ def _stripe_form(params: dict[str, Any], prefix: str = "") -> dict[str, str]:
         elif isinstance(value, (list, tuple)):
             for i, item in enumerate(value):
                 form.update(_stripe_form({str(i): item}, name))
+        elif isinstance(value, bool):
+            form[name] = "true" if value else "false"
         elif value is not None:
             form[name] = str(value)
     return form

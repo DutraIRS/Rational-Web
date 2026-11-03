@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import hmac
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
-from fastapi import Request, Response
+from fastapi import Request, WebSocket
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from .security import same_text
 
 if TYPE_CHECKING:
     from .session import Session
@@ -18,9 +21,9 @@ SESSION_COOKIE = "rw_sid"
 THEME_COOKIE = "rw_theme"
 CSRF_HEADER = "x-rw-csrf"
 _SECURITY_HEADERS = {
-    b"x-content-type-options": (b"X-Content-Type-Options", b"nosniff"),
-    b"referrer-policy": (b"Referrer-Policy", b"strict-origin-when-cross-origin"),
-    b"x-frame-options": (b"X-Frame-Options", b"SAMEORIGIN"),
+    b"x-content-type-options": b"nosniff",
+    b"referrer-policy": b"strict-origin-when-cross-origin",
+    b"x-frame-options": b"SAMEORIGIN",
 }
 
 
@@ -29,17 +32,47 @@ def base_path(request: Request) -> str:
     return str(request.scope.get("root_path", "")).rstrip("/")
 
 
-def json_error(status: int, code: str, message: str, *, details: Any = None, **extra: Any) -> JSONResponse:
+def json_error(
+    status: int,
+    code: str,
+    message: str,
+    *,
+    details: Any = None,
+    headers: Mapping[str, str] | None = None,
+    **extra: Any,
+) -> JSONResponse:
     """The one error shape every Rational endpoint returns: ``{"error": {code, message, details?}}``."""
     error: dict[str, Any] = {"code": code, "message": message}
     if details is not None:
         error["details"] = details
-    return JSONResponse({**extra, "error": error}, status_code=status, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        {**extra, "error": error}, status_code=status, headers={"Cache-Control": "no-store", **(headers or {})}
+    )
+
+
+def declared_length(request: Request) -> int:
+    """The body size the request announces; 0 if it does not say (chunked encoding)."""
+    declared = request.headers.get("content-length", "")
+    return int(declared) if declared.isdecimal() else 0
 
 
 def csrf_ok(request: Request, session: Session) -> bool:
-    # Compared as bytes: a header with non-ASCII characters must fail the check, not raise.
-    return hmac.compare_digest(request.headers.get(CSRF_HEADER, "").encode("latin-1"), session.csrf.encode())
+    return same_text(request.headers.get(CSRF_HEADER, ""), session.csrf)
+
+
+def same_origin(websocket: WebSocket, extra: Sequence[str] = ()) -> bool:
+    """True if a WebSocket handshake comes from this site's pages (or from an origin in ``extra``).
+
+    Browsers send cookies on cross-site WebSocket handshakes, so this is what stops another site
+    from connecting as the visitor.
+    """
+    origin, host = websocket.headers.get("origin"), websocket.headers.get("host")
+    if not origin:
+        return False
+    try:
+        return origin in extra or (bool(host) and urlsplit(origin).netloc == host)
+    except ValueError:  # not a URL
+        return False
 
 
 def is_local_path(value: str) -> bool:
@@ -73,26 +106,24 @@ def request_target(request: Request) -> str:
     return f"{path}?{request.url.query}" if request.url.query else path
 
 
-def security_headers(
-    response: Response,
-    nonce: str | None,
-    *,
-    inline_styles: bool = False,
-    style_origins: Sequence[str] = (),
-    script_origins: Sequence[str] = (),
-    frame_origins: Sequence[str] = (),
-) -> None:
-    for name, value in _SECURITY_HEADERS.values():
-        response.headers[name.decode("ascii")] = value.decode("ascii")
-    if nonce is not None:
-        style_src = "'self' 'unsafe-inline'" if inline_styles else f"'self' 'nonce-{nonce}'"
-        style_src = " ".join([style_src, *style_origins])
-        script_src = " ".join(["'self'", *script_origins])
-        frame_src = f"frame-src 'self' {' '.join(frame_origins)}; " if frame_origins else ""
-        response.headers["Content-Security-Policy"] = (
-            f"default-src 'self'; script-src {script_src}; style-src {style_src}; img-src 'self' data: https:; "
-            f"{frame_src}object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'"
-        )
+def content_security_policy(
+    nonce: str, *, inline_styles: bool = False, sources: Mapping[str, Sequence[str]] | None = None
+) -> str:
+    """The ``Content-Security-Policy`` of a page. ``sources`` adds origins to directives, by name."""
+    extra = dict(sources or {})
+
+    def directive(name: str, *own: str) -> str:
+        return " ".join([name, *own, *extra.pop(name, ())])
+
+    parts = [
+        "default-src 'self'",
+        directive("script-src", "'self'"),
+        directive("style-src", "'self'", "'unsafe-inline'" if inline_styles else f"'nonce-{nonce}'"),
+        directive("img-src", "'self'", "data:", "https:"),
+    ]
+    parts += [directive(name, "'self'") for name in list(extra)]  # frame-src, connect-src...
+    parts += ["object-src 'none'", "base-uri 'self'", "frame-ancestors 'self'", "form-action 'self'"]
+    return "; ".join(parts)
 
 
 class ScopedCORS:
@@ -135,8 +166,41 @@ class SecurityHeadersMiddleware:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
                 present = {name.lower() for name, _ in headers}
-                headers.extend(header for key, header in _SECURITY_HEADERS.items() if key not in present)
+                headers.extend((name, value) for name, value in _SECURITY_HEADERS.items() if name not in present)
                 message = {**message, "headers": headers}
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)
+
+
+class BodyLimitMiddleware:
+    """Refuse request bodies over ``limit`` bytes, before they fill the server's memory.
+
+    A ``Content-Length`` over the limit is answered at once; a body that turns out longer while it
+    is being read (chunked encoding) stops at the limit. Either way the answer is 413.
+    """
+
+    def __init__(self, app: ASGIApp, *, limit: int) -> None:
+        self.app = app
+        self.limit = limit
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        declared = next((value for name, value in scope["headers"] if name == b"content-length"), b"")
+        if declared.isdigit() and int(declared) > self.limit:
+            await json_error(413, "too_large", "Request body too large")(scope, receive, send)
+            return
+        received = 0
+
+        async def limited() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.limit:
+                    raise HTTPException(413, "Request body too large")
+            return message
+
+        await self.app(scope, limited, send)

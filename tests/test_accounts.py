@@ -1,5 +1,6 @@
 """Account emails: password reset, email verification and sign-in links."""
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass
@@ -126,3 +127,20 @@ async def test_the_lookups_must_be_written():
     for call in lookups:
         with pytest.raises(NotImplementedError):
             await call
+
+
+async def test_sending_never_waits_for_a_mail_server():
+    release, sent = asyncio.Event(), []
+
+    class Slow:
+        async def send(self, email):
+            await release.wait()
+            sent.append(email)
+
+    app = App(secret_key=SECRET)
+    accounts = ShopAccounts(app, Mailer(app, Slow(), sender="hi@shop.example"), base_url="https://shop.example")
+    await asyncio.wait_for(accounts.send_reset("ada@example.com"), 5)  # it would wait for ever otherwise
+    assert sent == []
+    release.set()
+    await asyncio.gather(*app._tasks)
+    assert len(sent) == 1

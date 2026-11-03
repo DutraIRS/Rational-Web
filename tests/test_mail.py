@@ -8,9 +8,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 from pydantic import ValidationError
 
-from rational import App, Column, Component, Heading, Link, Text, _http
+from rational import App, Button, Column, Component, Heading, Link, Text, _http
 from rational.jobs import Jobs
-from rational.mail import SMTP, Console, Email, Mailer, Memory, Postmark, Resend, html_to_text
+from rational.mail import SMTP, Console, Email, Mailer, Memory, Postmark, Resend, html_to_text, render_email
 
 
 class Welcome(Component):
@@ -134,6 +134,11 @@ def local_server():
                 self.end_headers()
                 self.wfile.write(b'{"error":"nope"}')
                 return
+            if self.path == "/html":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"<html>an error page, with status 200</html>")
+                return
             if self.path == "/moved":
                 self.send_response(302)
                 self.send_header("Location", "https://evil.example/")
@@ -170,3 +175,71 @@ async def test_http_helper_sends_json_and_forms_and_reports_errors(local_server)
     assert unreachable.value.status == 0
     with pytest.raises(ValueError, match="plain HTTP"):
         await _http.request("POST", "http://api.example/", json_body={})
+
+
+def test_html_to_text_decodes_once_and_keeps_text_at_the_end():
+    assert html_to_text("<p>Tom &amp;amp; Jerry &lt;b&gt;</p>") == "Tom &amp; Jerry <b>\n"
+    assert html_to_text("no tags, and a trailing &amp") == "no tags, and a trailing &\n"
+
+
+async def test_smtp_names_itself_after_the_sender_without_asking_dns(monkeypatch):
+    names = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, local_hostname=None, timeout=None, **kwargs):
+            names.append(local_hostname)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def starttls(self, context):
+            pass
+
+        def send_message(self, msg, to_addrs):
+            pass
+
+    monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSMTP)
+    email = Email(sender="Shop <hi@shop.example>", to=["b@x"], subject="S", html="<p>H</p>", text="H")
+    await SMTP("smtp.example").send(email)
+    await SMTP("smtp.example", security="tls").send(email)
+    assert names == ["shop.example", "shop.example"]
+
+
+async def test_resend_leaves_out_empty_recipients(monkeypatch):
+    sent = []
+
+    async def fake(method, url, *, json_body=None, **kwargs):
+        sent.append(json_body)
+
+    monkeypatch.setattr(_http, "request", fake)
+    await Resend("key").send(Email(sender="a@x", to=["b@x"], subject="S", html="<p>H</p>", text="H"))
+    await Resend("key").send(Email(sender="a@x", to=["b@x"], subject="S", html="H", text="H", cc=["c@x"], bcc=["d@x"]))
+    assert "cc" not in sent[0] and "bcc" not in sent[0]
+    assert sent[1]["cc"] == ["c@x"] and sent[1]["bcc"] == ["d@x"]
+
+
+async def test_emails_hold_no_runtime_markers_and_their_components_unmount():
+    unmounted = []
+
+    class Tracked(Component):
+        def unmount(self):
+            unmounted.append(True)
+
+        def render(self):
+            return Button("Hi", on_click=lambda: None)
+
+    html = await render_email(App(), Tracked(), "Subject")
+    assert "data-rw" not in html and unmounted == [True]
+
+
+async def test_http_helper_reports_nonsense_and_huge_answers(local_server, monkeypatch):
+    with pytest.raises(_http.HTTPError) as nonsense:
+        await _http.request("POST", local_server + "/html", json_body={})
+    assert nonsense.value.status == 200 and "<html" in nonsense.value.body
+    monkeypatch.setattr(_http, "MAX_ANSWER_BYTES", 4)
+    with pytest.raises(_http.HTTPError, match="too large"):
+        await _http.request("POST", local_server + "/", json_body={})

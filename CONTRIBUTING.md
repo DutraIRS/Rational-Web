@@ -15,7 +15,7 @@ $ playwright install chromium                         # optional: real-browser t
 Every change should pass:
 
 ```console
-$ pytest --cov=rational --cov-branch   # CI requires >= 88% branch coverage (add --ignore=tests/browser to skip the browser)
+$ pytest --cov                   # CI requires >= 90% branch coverage (add --ignore=tests/browser to skip the browser)
 $ ruff check . && ruff format --check .
 $ mypy                           # strict
 $ npx --yes eslint@10.12.0 src/rational/static   # the browser runtime; installs nothing here

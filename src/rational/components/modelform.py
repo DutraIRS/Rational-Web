@@ -75,10 +75,10 @@ def _control(
     annotation = _unwrap(info.annotation)
     label = _label(name, info)
     required = info.is_required()
-    common: dict[str, Any] = {"name": name, "help": info.description, "error": error}
+    common: dict[str, Any] = {"name": name, "help": info.description, "error": error, "disabled": disabled}
 
     if annotation is bool:
-        return Checkbox(label, name=name, checked=bool(value), disabled=disabled, help=info.description, error=error)
+        return Checkbox(label, checked=bool(value), **common)
     options = _options(annotation)
     if options is not None:
         if not required:
@@ -89,7 +89,7 @@ def _control(
     widget = extra.get("widget") if isinstance(extra, dict) else None
     if annotation is str and (widget == "textarea" or (max_length and max_length > LONG_TEXT)):
         return Textarea(label, value=value, required=required, maxlength=max_length, **common)
-    attrs: dict[str, Any] = {"disabled": disabled}
+    attrs: dict[str, Any] = {}
     lowered = name.lower()
     if annotation in (int, float):
         input_type = "number"

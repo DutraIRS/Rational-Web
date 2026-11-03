@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 try:
-    from sqlalchemy import MetaData, func, select
+    from sqlalchemy import MetaData, func, inspect, select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy.orm import DeclarativeBase
     from sqlalchemy.pool import NullPool
@@ -109,7 +109,7 @@ class Repository(Generic[M]):
     async def find(self, *where: Any, order_by: Any = None, limit: int | None = None, offset: int = 0) -> list[M]:
         query = select(self.model).where(*where).offset(offset)
         if order_by is not None:
-            query = query.order_by(order_by)
+            query = query.order_by(*order_by) if isinstance(order_by, tuple) else query.order_by(order_by)
         if limit is not None:
             query = query.limit(limit)
         async with self.db.session() as session:
@@ -120,8 +120,13 @@ class Repository(Generic[M]):
             return int(await session.scalar(select(func.count()).select_from(self.model).where(*where)) or 0)
 
     async def page(self, *where: Any, page: int = 1, size: int = 20, order_by: Any = None) -> Paged[M]:
+        """One page of rows, by primary key unless ``order_by`` says otherwise (without an order,
+        a database may repeat or skip rows between pages)."""
         if page < 1 or not 1 <= size <= 1000:
             raise ValueError("page starts at 1 and size is between 1 and 1000")
+        if order_by is None:
+            mapper: Any = inspect(self.model)
+            order_by = mapper.primary_key
         items = await self.find(*where, order_by=order_by, limit=size, offset=(page - 1) * size)
         return Paged(items, await self.count(*where), page, size)
 

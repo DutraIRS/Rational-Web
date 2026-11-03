@@ -1,5 +1,6 @@
 import pytest
 
+from rational.events import js as js_ns
 from rational.rendering import UnsafeMarkupError, h, to_html, unsafe_html
 from rational.rendering.nodes import Node, TextNode
 
@@ -85,3 +86,29 @@ def test_serialization_is_deterministic():
     tree = h("ul", [h("li", str(i), key=i) for i in range(3)])
     tree = Node(tree.tag, children=tuple(Node(c.tag, children=c.children) for c in tree.children))
     assert to_html(tree) == to_html(tree) == "<ul><li>0</li><li>1</li><li>2</li></ul>"
+
+
+def test_srcdoc_attribute_is_rejected():
+    with pytest.raises(UnsafeMarkupError):
+        to_html(h("iframe", srcdoc="<script>alert(1)</script>"))
+
+
+def test_js_set_attr_rejects_executable_markup():
+    with pytest.raises(ValueError):
+        js_ns.set_attr("srcdoc", "<img src=x onerror=alert(1)>")
+    with pytest.raises(ValueError):
+        js_ns.set_attr("onclick", "alert(1)")
+
+
+def test_js_set_attr_rejects_unsafe_urls():
+    for scheme in ("javascript:alert(1)", "vbscript:x", "data:text/html;base64,PHNjcmlwdD4="):
+        with pytest.raises(ValueError):
+            js_ns.set_attr("href", scheme)
+        with pytest.raises(ValueError):
+            js_ns.toggle_attr("href", scheme, "#ok")
+
+
+def test_js_set_attr_allows_safe_values():
+    js_ns.set_attr("href", "/home")
+    js_ns.set_attr("aria-expanded", "true")
+    js_ns.toggle_attr("aria-expanded")

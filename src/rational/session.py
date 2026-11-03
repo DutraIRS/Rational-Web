@@ -14,7 +14,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, MutableMapping
 from typing import Any, Generic, Protocol, TypeVar
 
-from ._tracking import changed, track_read
+from ._tracking import track_read
 
 USER_KEY = "rw.user"
 
@@ -38,7 +38,7 @@ class Session(MutableMapping[str, Any]):
         self.version = 0
         self.saved_revision = -1
         self.touched_at: float | None = None
-        # Page runtimes that want to hear about changes (live cross-tab sync); weak, so they can expire.
+        # Page runtimes and sockets that want to hear about changes; weak, so they can expire.
         self.listeners: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def __getitem__(self, key: str) -> Any:
@@ -61,7 +61,6 @@ class Session(MutableMapping[str, Any]):
 
     def bump(self) -> None:
         self.revision += 1
-        changed()
         for listener in list(self.listeners):
             listener.on_session_changed()
 
@@ -117,10 +116,19 @@ class TTLStore(Generic[V]):
 
     def sweep(self) -> int:
         now = time.monotonic()
-        expired = [k for k, (stamp, _) in self._items.items() if now - stamp > self.ttl]
+        expired = []
+        for key, (stamp, _) in self._items.items():
+            if now - stamp <= self.ttl:
+                break  # least recently used first: the rest are younger
+            expired.append(key)
         for key in expired:
             self._evict(key)
         return len(expired)
+
+    def clear(self) -> None:
+        """Evict everything (the app is shutting down)."""
+        for key in list(self._items):
+            self._evict(key)
 
     def __len__(self) -> int:
         return len(self._items)

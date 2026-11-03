@@ -1,8 +1,10 @@
+import json
+
 import pytest
 
 from rational import App
 from rational.backend import Service, remote
-from rational.session import Session
+from rational.session import Session, TTLStore
 from rational.stores import (
     MemorySessionDriver,
     PersistentSessionStore,
@@ -363,3 +365,85 @@ async def test_endless_conflicts_give_up_and_keep_the_change_for_next_time(caplo
     await store.save(session)
     assert "will retry next time" in caplog.text
     assert session.saved_revision != session.revision and session["x"] == 1
+
+
+async def test_conflicting_writes_do_not_diverge():
+    driver = MemorySessionDriver()
+    a = PersistentSessionStore(driver)
+    b = PersistentSessionStore(driver)
+
+    sa = a.create()
+    sa["x"] = "0"
+    await a.save(sa)  # persist so worker B can load it
+    sb = await b.load(sa.id)
+    assert sb is not None
+
+    sa["x"] = "A"
+    sb["x"] = "B"
+    await a.save(sa)
+    await b.save(sb)  # must adopt A's version, not silently keep its own view
+
+    raw = await driver.get("rational:session:" + sb.id)
+    payload = json.loads(raw)
+    assert payload["data"]["x"] == "B"  # both changed x: the last writer wins
+
+    again = await a.load(sb.id)
+    assert again is not None
+    again["y"] = 1
+    await a.save(again)  # worker A must not keep a stale same-version view
+
+    raw2 = await driver.get("rational:session:" + sb.id)
+    assert json.loads(raw2)["data"] == {"x": "B", "y": 1}
+
+
+async def test_logout_cannot_be_resurrected_by_a_stale_worker():
+    driver = MemorySessionDriver()
+    a = PersistentSessionStore(driver)
+    b = PersistentSessionStore(driver)
+
+    sa = a.create()
+    sa["rw.user"] = "alice"
+    await a.save(sa)
+    sid = sa.id
+    sb = await b.load(sid)
+    assert sb is not None
+
+    # Worker A logs out (rotation deletes the old id; the save writes the new one).
+    sa.logout()
+    await a.rotate(sa)
+    await a.save(sa)
+    assert await driver.get("rational:session:" + sid) is None
+
+    # Worker B, holding an in-flight change from before the logout, saves afterwards.
+    sb["note"] = "late"
+    await b.save(sb)
+    assert await driver.get("rational:session:" + sid) is None  # still gone: no resurrection
+    assert b.get(sid) is None
+
+
+async def test_rotation_deletes_the_old_record_and_the_save_writes_the_new_one():
+    driver = MemorySessionDriver()
+    store = PersistentSessionStore(driver)
+    session = store.create()
+    session["rw.user"] = "ada"
+    await store.save(session)
+    old = session.id
+    await store.rotate(session)
+    assert await driver.get("rational:session:" + old) is None
+    await store.save(session)
+    raw = await driver.get("rational:session:" + session.id)
+    assert raw is not None and json.loads(raw)["data"]["rw.user"] == "ada"
+
+
+def test_sweeping_stops_at_the_first_page_still_alive(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    evicted = []
+    store = TTLStore(10.0, 100, on_evict=evicted.append)
+    store.put("old", "old")
+    clock[0] = 8.0
+    store.put("young", "young")
+    clock[0] = 12.0
+    assert store.sweep() == 1 and evicted == ["old"] and len(store) == 1
+    store.clear()
+    assert evicted == ["old", "young"] and len(store) == 0

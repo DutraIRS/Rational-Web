@@ -38,7 +38,7 @@ jobs:
       - run: python -m pytest --ignore=tests/browser --cov
 
   servers:
-    # The Redis and SQL drivers and the Redis job store against real servers, not fakes.
+    # The Redis and SQL drivers, the Redis job store and the Redis bus against real servers, not fakes.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -61,7 +61,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install -e ".[dev]" asyncpg
-      - run: python -m pytest tests/test_session_drivers.py tests/test_jobs.py
+      - run: python -m pytest tests/test_session_drivers.py tests/test_jobs.py tests/test_bus.py
 
   quality:
     runs-on: ubuntu-24.04

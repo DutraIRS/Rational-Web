@@ -9,7 +9,6 @@ safe structured errors.
 from __future__ import annotations
 
 import inspect
-import logging
 import re
 import typing
 from collections.abc import Callable
@@ -28,8 +27,6 @@ if TYPE_CHECKING:
     from ..context import Context
     from ..session import Session
     from .database import Database
-
-log = logging.getLogger("rational")
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -155,17 +152,14 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
                     threads=app.sync_handlers == "thread",
                 )
             except RationalError as e:
-                error_response = json_error(e.status, e.code, e.message, details=e.details)
+                error_response = json_error(e.status, e.code, e.message, details=e.details, headers=e.headers)
                 await app.finish(request, error_response, ctx)
                 return error_response
             except Exception as e:
-                log.exception("error in remote %s.%s", cls.__name__, name)
-                if app._error_hooks:
-                    from rational.errors import ErrorInfo
-
-                    await app._run_error_hooks(
-                        ErrorInfo(e, "remote", request, extra={"service": cls.__name__, "method": name})
-                    )
+                message = f"error in remote {cls.__name__}.{name}"
+                await app.report_error(
+                    e, "remote", message, request=request, context=ctx, service=cls.__name__, method=name
+                )
                 error_response = json_error(500, "internal", "Something went wrong")
                 await app.finish(request, error_response, ctx)
                 return error_response

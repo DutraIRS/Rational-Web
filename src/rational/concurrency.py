@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any, Literal, TypeVar, overload
 
 import anyio.to_thread
@@ -27,6 +27,18 @@ SyncHandlers = Literal["loop", "thread"]
 
 _TIMEOUT_ATTR = "__rational_timeout__"
 _THREAD_ATTR = "__rational_threaded__"
+
+
+async def cancel_and_wait(tasks: Collection[asyncio.Task[Any]]) -> None:
+    """Cancel ``tasks`` and wait until they have stopped.
+
+    Not ``gather``: if the caller is cancelled meanwhile, ``gather`` raises the tasks' cancellation
+    instead of the caller's own, and a cancel scope waiting to catch its own lets that one escape.
+    """
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.wait(tasks)
 
 
 class HandlerTimeout(RationalError):  # noqa: N818 - public name mirrors NotFound, Forbidden

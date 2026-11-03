@@ -13,10 +13,11 @@ if TYPE_CHECKING:
 class ErrorInfo:
     """What ``app.on_error`` receives: an unhandled exception and where it happened.
 
-    ``kind`` is one of ``"page"``, ``"event"``, ``"remote"`` or ``"job"``. ``request`` is the
-    incoming request for the first three and ``None`` for jobs. ``context`` is the page or
-    request context when one exists. ``extra`` carries per-kind detail: the handler id for
-    events, the service and method for remotes, the job name and attempt for jobs.
+    ``kind`` is one of ``"page"``, ``"event"``, ``"remote"``, ``"job"``, ``"task"`` (a page's
+    background task or push) or ``"socket"``. ``request`` is the incoming request for the first
+    three and ``None`` for the others. ``context`` is the page or request context when one
+    exists. ``extra`` carries per-kind detail: the handler id for events, the service and method
+    for remotes, the job name and attempt for jobs, the class for sockets.
     """
 
     exc: BaseException
@@ -31,6 +32,7 @@ class RationalError(Exception):
 
     status: int = 400
     code: str = "error"
+    headers: dict[str, str] | None = None  # extra response headers, such as Retry-After
 
     def __init__(
         self, message: str = "", *, code: str | None = None, status: int | None = None, details: Any = None

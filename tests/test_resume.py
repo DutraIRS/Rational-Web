@@ -1,8 +1,10 @@
 """Resumable pages: state survives eviction of the in-memory runtime."""
 
+import logging
+
 import pytest
 
-from rational import App, Button, Column, Component, Page, State, Text
+from rational import App, Button, Column, Component, Page, PersistentSessionStore, State, Text
 from rational.stores import MemorySessionDriver
 from rational.testing import EventFailedError, TestClient
 
@@ -197,3 +199,73 @@ def test_a_deploy_that_only_adds_state_resumes():
     new.http.cookies.set("rw_sid", old.http.cookies["rw_sid"])
     view.client = new
     assert "error" not in view.click("+ old")
+
+
+async def test_a_failed_save_does_not_read_as_another_worker_having_moved_on():
+    app, _mounts = make_app()
+    client = TestClient(app)
+    view = client.open("/items/1")
+    runtime = app.pages.get(view.manifest["page"])
+    resumer = app.resume
+    await resumer.save(runtime)  # stored at this revision
+    runtime.revision += 2  # as after an event whose save failed
+    assert await resumer.save(runtime, expect_revision=runtime.revision)
+    runtime.revision -= 3
+    assert not await resumer.save(runtime, expect_revision=runtime.revision)  # the stored one is really newer
+
+
+def deployed_page_state(driver, kind):
+    app = App(page_snapshots=driver, session_store=PersistentSessionStore(driver))
+
+    @app.page("/")
+    class Home(Page):
+        total = State(kind(), scope="page")
+
+        def bump(self):
+            self.total = kind(1)
+
+        def render(self):
+            return Button("+", on_click=self.bump)
+
+    return TestClient(app)
+
+
+def test_page_state_that_no_longer_fits_the_code_reloads_the_page(caplog):
+    driver = MemorySessionDriver()
+    old, new = deployed_page_state(driver, int), deployed_page_state(driver, str)
+    view = old.open("/")
+    view.click("+")
+    new.http.cookies.set("rw_sid", old.http.cookies["rw_sid"])
+    view.client = new
+    with caplog.at_level(logging.INFO, "rational"):
+        reply = view.click("+", check=False)
+    assert reply["error"]["code"] == "expired"
+    record = next(r for r in caplog.records if "cannot be resumed" in r.getMessage())
+    assert record.levelno == logging.INFO and record.exc_info is None  # after a deploy, not an error
+
+
+def test_a_page_that_requires_signing_in_does_not_resume_for_a_signed_out_visitor():
+    driver = MemorySessionDriver()
+    store = PersistentSessionStore(MemorySessionDriver())
+    app = App(page_snapshots=driver, session_store=store)
+
+    @app.page("/login")
+    class Login(Page):
+        def mount(self):
+            self.context.session.login("ada")
+
+        def render(self):
+            return Text("in")
+
+    @app.page("/account", auth="required")
+    class Account(Page):
+        def render(self):
+            return Button("Act", on_click=lambda: None)
+
+    client = TestClient(app)
+    client.http.get("/login")
+    view = client.open("/account")
+    page_id = view.manifest["page"]
+    app.pages.pop(page_id)  # this worker no longer holds it
+    app.sessions.get(client.http.cookies["rw_sid"]).data.clear()
+    assert view.click("Act", check=False)["error"]["code"] == "expired"

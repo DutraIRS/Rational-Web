@@ -167,7 +167,8 @@ def test_stylesheet_dedupes_and_drains(compiler):
     assert sheet.drain() == []
     sheet.use(Style(padding=2))
     assert len(sheet.drain()) == 1
-    assert sheet.css().count("{") == 2
+    sheet.use(Style(padding=3))
+    assert "".join(sheet.drain()).count("{") == 1
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))

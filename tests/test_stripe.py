@@ -5,6 +5,9 @@ import hmac
 import json
 import time
 
+import anyio
+from starlette.testclient import TestClient as StarletteClient
+
 from rational import App, Page, Text, _http
 from rational.stripe import Stripe, StripeError, _stripe_form
 from rational.testing import TestClient
@@ -181,3 +184,100 @@ def test_a_failed_checkout_shows_an_error_page(monkeypatch):
     link = stripe.checkout_url(line_items=[{"price": "price_1", "quantity": 1}], mode="payment")
     response = client.http.get(link, follow_redirects=False)
     assert response.status_code == 502 and "Checkout is not available" in response.text
+
+
+def test_a_nan_timestamp_does_not_skip_the_freshness_check(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    app = App(secret_key="k" * 40)
+    Stripe(app, secret_key="sk_test_x", webhook_secret="whsec_1", path="/stripe")
+    payload = b'{"type": "checkout.session.completed"}'
+    t = int(time.time())
+    mac = hmac.new(b"whsec_1", b"nan." + payload, hashlib.sha256).hexdigest()
+    forged_nan = TestClient(app).http.post(
+        "/stripe/webhook", content=payload, headers={"Stripe-Signature": "t=nan,v1=" + mac}
+    )
+    assert forged_nan.status_code == 400  # nan fails the staleness check instead of bypassing it
+    mac2 = hmac.new(b"whsec_1", f"{t}.".encode() + payload, hashlib.sha256).hexdigest()
+    fresh = TestClient(app).http.post(
+        "/stripe/webhook", content=payload, headers={"Stripe-Signature": f"t={t},v1={mac2}"}
+    )
+    assert fresh.status_code == 200
+
+
+def test_site_paths_become_absolute_once_under_a_prefix(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    app, stripe, _client, _events = stripe_app(fake)
+    link = stripe.checkout_url(line_items=[], mode="payment", success_url="/done", cancel_url="https://x.example/c")
+    served = StarletteClient(app, base_url="https://site.example", root_path="/shop")
+    assert served.get(link, follow_redirects=False).status_code == 303
+    assert fake.checkouts[0]["success_url"] == "https://site.example/shop/done"
+    assert fake.checkouts[0]["cancel_url"] == "https://x.example/c"
+
+
+def test_base_url_makes_site_paths_absolute_everywhere(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    _app, stripe, client, _events = stripe_app(fake, base_url="https://shop.example/")
+
+    async def run():
+        await stripe.portal("cus_1", return_url="/account")
+        await stripe.checkout(mode="payment", success_url="/done")
+
+    anyio.run(run)
+    assert fake.portals[0]["return_url"] == "https://shop.example/account"
+    assert fake.checkouts[0]["success_url"] == "https://shop.example/done"
+    client.http.get(stripe.checkout_url(mode="payment", success_url="/ok"), follow_redirects=False)
+    assert fake.checkouts[1]["success_url"] == "https://shop.example/ok"
+
+
+def test_portal_without_a_return_url_sends_none(monkeypatch):
+    sent = []
+
+    async def fake(method, url, *, form=None, **kwargs):
+        sent.append(form)
+        return {"url": "https://billing.stripe.com/p/1"}
+
+    monkeypatch.setattr(_http, "request", fake)
+    stripe = Stripe(App(secret_key="k" * 40), secret_key="sk")
+    anyio.run(stripe.portal, "cus_1")
+    assert sent == [{"customer": "cus_1"}]
+
+
+def test_booleans_are_written_the_way_stripe_reads_them():
+    assert _stripe_form({"allow_promotion_codes": True, "x": {"y": False}}) == {
+        "allow_promotion_codes": "true",
+        "x[y]": "false",
+    }
+
+
+def test_customer_ids_cannot_change_the_path(monkeypatch):
+    called = []
+
+    async def fake(method, url, **kwargs):
+        called.append(url)
+        return {}
+
+    monkeypatch.setattr(_http, "request", fake)
+    stripe = Stripe(App(secret_key="k" * 40), secret_key="sk")
+    anyio.run(stripe.customer, "cus_1/../../v1/charges")
+    assert called == ["https://api.stripe.com/v1/customers/cus_1%2F..%2F..%2Fv1%2Fcharges"]
+
+
+def test_an_answer_without_a_url_shows_the_error_page(monkeypatch):
+    async def fake(method, url, **kwargs):
+        return {"id": "cs_without_url"}
+
+    monkeypatch.setattr(_http, "request", fake)
+    _app, stripe, client, _events = stripe_app(None)
+    reply = client.http.get(stripe.checkout_url(mode="payment"), follow_redirects=False)
+    assert reply.status_code == 502 and "not available" in reply.text
+
+
+def test_a_signature_with_non_ascii_characters_is_refused_not_a_crash():
+    _app, stripe, client, events = stripe_app(None)
+    payload = b'{"type":"x"}'
+    header = f"t={int(time.time())},v1=é".encode()
+    reply = client.http.post("/stripe/webhook", content=payload, headers={"Stripe-Signature": header})
+    assert reply.status_code == 400 and events == []

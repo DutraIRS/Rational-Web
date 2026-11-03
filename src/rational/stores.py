@@ -164,10 +164,10 @@ class RedisSessionDriver:
 class SQLSessionDriver:
     """Sessions and page snapshots in a SQL database, through SQLAlchemy (``pip install "rational[db]"``).
 
-    Postgres in production (``postgresql+asyncpg://...``, plus ``pip install asyncpg``); any database
-    SQLAlchemy supports works, SQLite included. Pass a URL or a :class:`~rational.backend.database.Database`.
-    The table is created on first use. Compare-and-swap is a single guarded ``UPDATE``, so it holds
-    across every worker and server.
+    Postgres in production (``postgresql+asyncpg://...``, plus ``pip install asyncpg``) or SQLite, the
+    two its tests run against; others SQLAlchemy supports should work. Pass a URL or a
+    :class:`~rational.backend.database.Database`. The table is created on first use. Compare-and-swap
+    is a single guarded ``UPDATE``, so it holds across every worker and server.
     """
 
     def __init__(self, database: Any, *, table: str = "rational_sessions") -> None:
@@ -183,7 +183,7 @@ class SQLSessionDriver:
             MetaData(),
             Column("key", String(255), primary_key=True),
             Column("value", LargeBinary, nullable=False),
-            Column("expires", Float, nullable=False, index=True),
+            Column("expires", Float(precision=53), nullable=False, index=True),  # to the second, in Unix time
         )
         self._ready = False
         self._setup_lock = asyncio.Lock()
@@ -280,8 +280,11 @@ class SQLSessionDriver:
 
         self._writes += 1
         if self._writes % 500 == 0:
-            async with self.db.engine.begin() as conn:
-                await conn.execute(delete(self.table).where(self.table.c.expires <= time.time()))
+            try:
+                async with self.db.engine.begin() as conn:
+                    await conn.execute(delete(self.table).where(self.table.c.expires <= time.time()))
+            except Exception:  # the write this follows is done; the next sweep tries again
+                log.exception("could not delete expired sessions")
 
 
 class _Record(NamedTuple):

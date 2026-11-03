@@ -1,11 +1,12 @@
 import asyncio
 import time
 
+import anyio
 import pytest
 
 from rational import App, Button, Column, Component, Page, State, Text, threaded, timeout
 from rational.backend.services import Service, remote
-from rational.concurrency import HandlerTimeout, invoke
+from rational.concurrency import HandlerTimeout, cancel_and_wait, invoke
 from rational.testing import TestClient
 
 
@@ -189,3 +190,15 @@ def test_remote_methods_honour_timeout_and_threads():
     assert stalled.json()["error"]["code"] == "timeout"
     assert quick.json() == "ok"
     assert ran_in["thread"] is False and ran_in["loop"] is True
+
+
+async def test_cancel_and_wait_leaves_the_callers_own_cancellation_intact():
+    task = asyncio.create_task(asyncio.Event().wait())
+    await asyncio.sleep(0)  # it has started, and waits
+    with anyio.CancelScope() as scope:
+        asyncio.get_running_loop().call_soon(scope.cancel)  # lands while waiting for the task
+        await cancel_and_wait([task])
+    assert scope.cancelled_caught
+    await asyncio.sleep(0)
+    assert task.cancelled()
+    await cancel_and_wait([])  # nothing to stop

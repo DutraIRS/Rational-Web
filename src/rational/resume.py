@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import Request
 
 from .runtime import PageRuntime
-from .state import class_name
+from .state import StateMismatch, class_name
 from .stores import json_plain
 from .styling.compiler import StyleSheet
 
@@ -98,18 +98,13 @@ class PageResumer:
                 await self.driver.set(key, raw, self.ttl)
                 return True
             stored = await self.driver.get(key)
-            if stored is not None and _revision(stored) not in (None, expect_revision):
+            revision = None if stored is None else _revision(stored)
+            if revision is not None and revision > expect_revision:  # older: an earlier save failed
                 return False
             return await self.driver.cas(key, stored, raw, self.ttl)
         except Exception:
             log.exception("could not save the page snapshot")
             return True
-
-    async def forget(self, page_id: str) -> None:
-        try:
-            await self.driver.delete(self._key(page_id))
-        except Exception:
-            log.exception("could not delete the page snapshot")
 
     async def resume(self, request: Request, page_id: str | None, *, rev: int | None = None) -> PageRuntime | None:
         """The live runtime for ``page_id``, rebuilt from its snapshot if this process lacks it or holds
@@ -141,18 +136,26 @@ class PageResumer:
         if route is None or session is None or session.id != snap.get("sid"):
             return None
         ctx = await app.context_for(request, session)
+        if route.auth == "required" and ctx.user is None:
+            return None
         try:
             page = route.build(snap["params"])
             runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
             runtime.id = page_id
             runtime.origin = (route.path, snap["params"])
+            runtime.requires_user = route.auth == "required"
             runtime.page_state.update(snap["page_state"])
             runtime.restore = snap["components"]
+            runtime.resuming = True
             await runtime.render_page()
+        except StateMismatch as e:  # after a deploy: nothing went wrong, the browser loads the page afresh
+            log.info("page %s cannot be resumed: %s", page_id, e)
+            return None
         except Exception:
             log.exception("could not resume page %s", page_id)
             return None
         runtime.restore = {}
+        runtime.resuming = False
         runtime.revision = int(snap["rev"])
         runtime.seq = int(snap["seq"])
         runtime.served = True

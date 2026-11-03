@@ -14,7 +14,6 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
 
 from fastapi import Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -22,13 +21,12 @@ from pydantic import BaseModel, ValidationError
 
 from . import dev
 from .errors import InvalidInput, RationalError, Redirect
-from .http import SESSION_COOKIE, base_path, csrf_ok, json_error
+from .http import SESSION_COOKIE, base_path, csrf_ok, declared_length, json_error, same_origin
 from .runtime import PageRuntime, StaleHandlerError
 
 if TYPE_CHECKING:
     from .app import App
-
-log = logging.getLogger("rational")
+    from .context import Context
 
 PROTOCOL_VERSION = 1
 EVENT_PATH = "/_rational/event"
@@ -66,9 +64,31 @@ def _stale(runtime: PageRuntime, message: str) -> JSONResponse:
     )
 
 
+async def _failure(
+    app: App, runtime: PageRuntime, exc: Exception, request: Request, ctx: Context, handler: str
+) -> tuple[dict[str, Any] | None, int]:
+    """What the browser hears about an exception from a handler or a re-render: its error and status."""
+    if isinstance(exc, Redirect):
+        runtime.add_action({"op": "navigate", "url": exc.url})
+        return None, 200
+    if isinstance(exc, StaleHandlerError):
+        runtime.resend()  # unknown handler: the browser is out of sync, so it gets the whole page
+        return exc.to_json(), 200
+    if isinstance(exc, InvalidInput):
+        return exc.to_json(), 200  # an expected outcome of user input, not a failed request
+    if isinstance(exc, RationalError):
+        return exc.to_json(), exc.status
+    await app.report_error(
+        exc, "event", f"error in event handler {handler}", request=request, context=ctx, handler=handler
+    )
+    error: dict[str, Any] = {"code": "internal", "message": "Something went wrong"}
+    if app.debug:
+        error.update(message=f"{type(exc).__name__}: {exc}", debug=dev.describe(exc))
+    return error, 500
+
+
 async def handle_event(app: App, request: Request) -> Response:
-    body = await request.body()
-    if len(body) > app.max_event_bytes:
+    if declared_length(request) > app.max_event_bytes or len(body := await request.body()) > app.max_event_bytes:
         return _error(413, "too_large", "Event payload too large")
     try:
         event = EventRequest.model_validate(json.loads(body))
@@ -81,13 +101,15 @@ async def handle_event(app: App, request: Request) -> Response:
         return _error(410, "expired", "This page expired")
     session = await app.load_session(request)
     if session is None or session is not runtime.session:
-        return _error(403, "forbidden", "Session mismatch")
+        return _error(403, "session", "Session mismatch")
     if not csrf_ok(request, session):
         return _error(403, "csrf", "Invalid CSRF token")
     if not runtime.allow_event(app.event_burst, app.event_rate):
         return _error(429, "rate_limited", "Too many events")
 
     ctx = await app.context_for(request, session)
+    if runtime.requires_user and ctx.user is None:
+        return _stale(runtime, "Please sign in to continue")  # the reload leads to the login page
     async with app.session_lock(ctx), runtime.lock:
         if event.rev != runtime.revision:
             return _stale(runtime, "This page changed in another request; reload it before continuing")
@@ -107,26 +129,8 @@ async def handle_event(app: App, request: Request) -> Response:
                     timeout=app.handler_timeout,
                     threads=app.sync_handlers == "thread",
                 )
-            except StaleHandlerError as e:
-                # Unknown handler: the browser is out of sync. Resend the whole page instead of failing.
-                runtime.dirty.add(runtime.page.cid or "")
-                runtime.resync = True
-                error = e.to_json()
-            except Redirect as r:
-                runtime.add_action({"op": "navigate", "url": r.url})
-            except InvalidInput as e:
-                error = e.to_json()  # an expected outcome of user input, not a failed request
-            except RationalError as e:
-                error, status = e.to_json(), e.status
             except Exception as e:
-                log.exception("error in event handler %s", event.handler)
-                if app._error_hooks:
-                    from .errors import ErrorInfo
-
-                    await app._run_error_hooks(ErrorInfo(e, "event", request, extra={"handler": event.handler}))
-                error, status = {"code": "internal", "message": "Something went wrong"}, 500
-                if app.debug:
-                    error.update(message=f"{type(e).__name__}: {e}", debug=dev.describe(e))
+                error, status = await _failure(app, runtime, e, request, ctx, event.handler)
             finally:
                 duration_ms = (time.perf_counter() - event_started) * 1000
                 app.logging.finish_span(
@@ -145,7 +149,14 @@ async def handle_event(app: App, request: Request) -> Response:
                     status_code=status,
                     error_code=error.get("code") if error else None,
                 )
-        patches = await runtime.flush()
+        patches: list[dict[str, Any]] = []
+        try:
+            patches = await runtime.flush()
+        except Exception as e:  # a re-render failed: the page stays usable, and the next event resends it
+            runtime.resend()
+            failure = await _failure(app, runtime, e, request, ctx, event.handler)
+            if failure[0] is not None:
+                error, status = failure
         stored_revision = runtime.revision
         runtime.revision += 1
         runtime.seq += 1
@@ -165,10 +176,9 @@ async def handle_event(app: App, request: Request) -> Response:
             }
             if error is not None:
                 payload["error"] = error
-            scripts = runtime.take_scripts()
+            scripts = runtime.take_scripts(base_path(request))
             if scripts:
-                base = base_path(request)
-                payload["load"] = [base + src for src in scripts]
+                payload["load"] = scripts
             if await app.commit_session(ctx):
                 payload["csrf"] = session.csrf
             response = JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
@@ -183,7 +193,9 @@ async def handle_stream(app: App, request: Request) -> Response:
         return _error(410, "expired", "This page expired")
     session = await app.load_session(request)
     if session is None or session is not runtime.session:
-        return _error(403, "forbidden", "Session mismatch")
+        return _error(403, "session", "Session mismatch")
+    if runtime.requires_user and (await app.context_for(request, session)).user is None:
+        return _error(403, "session", "Please sign in to continue")
     queue = runtime.subscribe()
     if queue is None:
         return _error(429, "too_many_streams", "Too many open streams for this page")
@@ -214,17 +226,14 @@ async def handle_stream(app: App, request: Request) -> Response:
     )
 
 
-def _same_origin(websocket: WebSocket) -> bool:
-    origin = websocket.headers.get("origin")
-    host = websocket.headers.get("host")
-    return bool(origin and host and urlsplit(origin).netloc == host)
-
-
 async def handle_websocket(app: App, websocket: WebSocket) -> None:
     """``/_rational/ws?page=ID``: the push stream over a WebSocket. Events still travel over POST."""
     runtime = app.pages.get(websocket.query_params.get("page"))
     session = await app.sessions.load(websocket.cookies.get(SESSION_COOKIE))
-    if runtime is None or session is None or session is not runtime.session or not _same_origin(websocket):
+    if runtime is None or session is None or session is not runtime.session or not same_origin(websocket):
+        await websocket.close(code=1008)
+        return
+    if runtime.requires_user and (await app.websocket_context(websocket, session)).user is None:
         await websocket.close(code=1008)
         return
     queue = runtime.subscribe()
@@ -234,11 +243,9 @@ async def handle_websocket(app: App, websocket: WebSocket) -> None:
     await websocket.accept()
 
     async def watch_disconnect() -> None:
-        try:
+        with contextlib.suppress(Exception):  # a close, or a frame nobody should have sent: the end either way
             while True:
                 await websocket.receive_text()  # clients send nothing; this only notices the close
-        except WebSocketDisconnect:
-            return
 
     watcher = asyncio.create_task(watch_disconnect())
     try:

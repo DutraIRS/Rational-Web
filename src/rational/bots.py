@@ -18,6 +18,7 @@ default; ``app.limiter = Limiter(RedisSessionDriver(url=...))`` shares them betw
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from collections.abc import Callable
@@ -25,7 +26,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from . import _http
-from .assets import Asset
 from .component import Component
 from .errors import FieldError, InvalidInput, RationalError
 from .rendering.builder import h
@@ -53,6 +53,7 @@ class TooManyRequests(RationalError):  # noqa: N818 - reads like the HTTP status
 
     def __init__(self, retry_after: float) -> None:
         self.retry_after = max(1, int(retry_after + 0.999))
+        self.headers = {"Retry-After": str(self.retry_after)}
         super().__init__(
             f"Too many requests; try again in {self.retry_after} s", details={"retry_after": self.retry_after}
         )
@@ -109,7 +110,9 @@ class Limiter:
         now = time.time()
         slot = int(now // spec.window)
         name = getattr(target, "__qualname__", type(target).__name__)
-        key = f"rational:limit:{name}:{_client(context, spec.per)}:{slot}"
+        # Hashed: of a size any driver can store, and session ids stay out of the store's keys.
+        who = hashlib.sha256(f"{name}:{_client(context, spec.per)}".encode()).hexdigest()
+        key = f"rational:limit:{who}:{slot}"
         if await self._increment(key, int(spec.window) + 1) > spec.count:
             raise TooManyRequests((slot + 1) * spec.window - now)
 
@@ -122,14 +125,17 @@ class Limiter:
         raise RuntimeError(f"could not update rate limit counter {key!r}")
 
 
-def _client(context: Context, per: str) -> str:
+def _ip(context: Context) -> str:
     connection = context.request if context.request is not None else context.websocket
-    ip = connection.client.host if connection is not None and connection.client else "unknown"
+    return connection.client.host if connection is not None and connection.client else "unknown"
+
+
+def _client(context: Context, per: str) -> str:
     if per == "user" and context.user is not None:
         return "user:" + str(getattr(context.user, "id", context.user))
     if per == "session" and (session := context.peek_session()) is not None:
         return "session:" + session.id
-    return "ip:" + ip
+    return "ip:" + _ip(context)
 
 
 def human(handler: T) -> T:
@@ -149,10 +155,15 @@ class HumanCheck(Component):
     started = State("")
 
     def mount(self) -> None:
-        self.started = _signer(self.context.app).sign(time.time())  # once: re-renders keep the time
+        if not self.started:  # resuming a page keeps the time its form was first shown
+            # Bound to this page view. Not to the session: signed values can be read, and its id stays in the cookie.
+            self.started = _signer(self.context.app).sign([self._require_runtime().id, time.time()])
 
     def render(self) -> Node:
         app = self.context.app
+        captcha = app.captcha if app is not None else None
+        if captcha is not None:
+            self._require_runtime().use_script(captcha.script)
         trap = h(
             "div",
             h("label", "Leave this empty", for_=HONEYPOT),
@@ -160,8 +171,8 @@ class HumanCheck(Component):
             aria_hidden="true",
             style=_OFF_SCREEN,
         )
-        captcha = app.captcha.widget() if app is not None and app.captcha is not None else None
-        return h("div", trap, h("input", type="hidden", name=STARTED, value=self.started), captcha)
+        widget = captcha.widget() if captcha is not None else None
+        return h("div", trap, h("input", type="hidden", name=STARTED, value=self.started), widget)
 
 
 def _signer(app: App | None) -> Signer:
@@ -169,7 +180,7 @@ def _signer(app: App | None) -> Signer:
     return app.signer("rational.bots.form")
 
 
-async def check_submit(handler: Any, context: Context, form: dict[str, Any]) -> None:
+async def check_submit(handler: Any, context: Context, form: dict[str, Any], page_id: str) -> None:
     """Remove the check fields from ``form``; for an ``@human`` handler, raise ``NotHuman`` unless they pass."""
     app = context.app
     assert app is not None
@@ -177,43 +188,56 @@ async def check_submit(handler: Any, context: Context, form: dict[str, Any]) -> 
     token = form.pop(app.captcha.field, None) if app.captcha is not None else None
     if not getattr(handler, "__rw_human__", False):
         return
-    if trap or not isinstance(started, str):
+    if trap:
         raise NotHuman()
+    if not isinstance(started, str):
+        raise NotHuman("@human needs a HumanCheck() inside the form") if app.debug else NotHuman()
     try:
-        shown_at = float(_signer(app).unsign(started, max_age=24 * 3600))
+        shown_on, shown_at = _signer(app).unsign(started, max_age=24 * 3600)
+        elapsed = time.time() - float(shown_at)
     except (InvalidToken, TypeError, ValueError):
         raise NotHuman("This form is too old; reload the page and try again") from None
-    if time.time() - shown_at < app.min_form_seconds:
+    if shown_on != page_id or elapsed < app.min_form_seconds:
         raise NotHuman()
     if app.captcha is not None:
-        await app.captcha.verify(token if isinstance(token, str) else "", _client(context, "ip")[3:])
+        await app.captcha.verify(token if isinstance(token, str) else "", _ip(context))
 
 
-_PROVIDERS = {
-    # name: (widget script, widget class, form field, verify URL, frame origins, extra script origins)
+_HCAPTCHA_ORIGINS = ["https://hcaptcha.com", "https://*.hcaptcha.com"]
+_PROVIDERS: dict[str, tuple[str, str, str, str, dict[str, list[str]]]] = {
+    # name: (widget script, widget class, form field, verify URL, Content-Security-Policy sources)
     "turnstile": (
         "https://challenges.cloudflare.com/turnstile/v0/api.js",
         "cf-turnstile",
         "cf-turnstile-response",
         "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-        ("https://challenges.cloudflare.com",),
-        (),
+        {
+            "script-src": ["https://challenges.cloudflare.com"],
+            "frame-src": ["https://challenges.cloudflare.com"],
+        },
     ),
     "hcaptcha": (
         "https://js.hcaptcha.com/1/api.js",
         "h-captcha",
         "h-captcha-response",
         "https://api.hcaptcha.com/siteverify",
-        ("https://hcaptcha.com", "https://*.hcaptcha.com"),
-        ("https://*.hcaptcha.com",),
+        {
+            "script-src": _HCAPTCHA_ORIGINS,
+            "frame-src": _HCAPTCHA_ORIGINS,
+            "style-src": _HCAPTCHA_ORIGINS,
+            "connect-src": _HCAPTCHA_ORIGINS,
+        },
     ),
     "recaptcha": (
         "https://www.google.com/recaptcha/api.js",
         "g-recaptcha",
         "g-recaptcha-response",
         "https://www.google.com/recaptcha/api/siteverify",
-        ("https://www.google.com", "https://recaptcha.google.com"),
-        ("https://www.gstatic.com",),
+        {
+            "script-src": ["https://www.google.com", "https://www.gstatic.com"],
+            "frame-src": ["https://www.google.com", "https://recaptcha.google.com"],
+            "connect-src": ["https://www.google.com"],
+        },
     ),
 }
 
@@ -221,7 +245,9 @@ _PROVIDERS = {
 class Captcha:
     """A CAPTCHA in every :class:`HumanCheck`: Cloudflare Turnstile (free, private), hCaptcha or reCAPTCHA v2.
 
-    The widget's script and frames are added to the app's pages and Content-Security-Policy.
+    The widget's script loads only on pages with a ``HumanCheck``, which client navigation always
+    loads in full (the script sets up the widgets it finds as it loads). Its origins are added to
+    the app's Content-Security-Policy. A ``HumanCheck`` must be in the page's first render.
     """
 
     def __init__(
@@ -229,17 +255,17 @@ class Captcha:
     ) -> None:
         if provider not in _PROVIDERS:
             raise ValueError(f"provider must be one of {sorted(_PROVIDERS)}")
-        script, self.css_class, self.field, self.verify_url, frames, scripts = _PROVIDERS[provider]
+        self.script, self.css_class, self.field, self.verify_url, sources = _PROVIDERS[provider]
         self.provider = provider
         self.site_key = site_key
         self.secret = secret
         app.captcha = self
-        app.scripts = (*app.scripts, Asset(script))
-        app.frame_origins += frames
-        app.extra_script_origins += scripts
+        for directive, origins in sources.items():
+            app.csp_sources.setdefault(directive, []).extend(origins)
 
     def widget(self) -> Node:
-        return h("div", class_=self.css_class, data_sitekey=self.site_key)
+        # data-rw-ignore: the provider's script fills this in, and a re-render must not wipe it.
+        return h("div", class_=self.css_class, data_sitekey=self.site_key, data_rw_ignore=True)
 
     async def verify(self, token: str, ip: str | None = None) -> None:
         """Ask the provider whether ``token`` was earned by a person; raise ``FieldError`` if not."""

@@ -85,3 +85,21 @@ def test_query_state_is_declared_with_plain_values_on_the_server():
 
     with pytest.raises(ClientCompileError, match="State\\(query=...\\) works in server components"):
         TestClient(app).open("/")
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "abc"])
+def test_a_number_that_is_not_a_finite_number_falls_back_to_the_default(raw):
+    class Search(Component):
+        ratio = State(1.5, query="r")
+
+        def render(self):
+            return Text(f"ratio={self.ratio}")
+
+    app = App()
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Search()
+
+    assert "ratio=1.5" in TestClient(app).open(f"/?r={raw}").text

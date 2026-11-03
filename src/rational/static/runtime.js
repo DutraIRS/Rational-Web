@@ -132,6 +132,14 @@
       if (res.status === 410) { location.reload(); return; }
       const data = await res.json().catch(() => ({ error: { code: "bad_response", message: "Unexpected response" } }));
       if (mine !== epoch) return;
+      const refused = data.error?.code;  // the event did not run (a handler's own 403 has other codes)
+      if (res.status === 403 && (refused === "session" || refused === "csrf")) {
+        if (refused === "session" || item.retried) { location.reload(); return; }
+        item.retried = true;  // a sign-in in another tab changed the token: fetch it, then send again
+        await refreshCsrf();
+        if (mine === epoch) queue.unshift(item);
+        return;
+      }
       // Pushed batches rendered before this response go first, so older HTML never overwrites newer.
       const seq = typeof data.seq === "number" ? data.seq : Infinity;
       held.sort((a, b) => a.seq - b.seq);
@@ -151,6 +159,11 @@
       if (!queue.length) document.documentElement.removeAttribute("data-rw-busy");
       pump();
     }
+  }
+
+  async function refreshCsrf() {
+    const res = await fetch((M.base || "") + "/_rational/csrf", { credentials: "same-origin" });
+    M.csrf = (await res.json()).csrf;
   }
 
   // ---- server push -------------------------------------------------------------------------
@@ -232,6 +245,7 @@
         if (a.value === null) url.searchParams.delete(a.name);
         else url.searchParams.set(a.name, a.value);
         history.replaceState(history.state, "", url);
+        here = location.pathname + location.search;
       }
       else if (a.op === "stream") { M.stream = M.stream || M.endpoint.replace(/event$/, "stream"); openStream(); }
       else if (a.op === "js") runOps(a.ops, document.body);
@@ -583,13 +597,15 @@
   function swap(doc, url, push) {
     const nextManifest = doc.getElementById("rw-manifest");
     if (!nextManifest) { location.assign(url); return; }  // a page without the runtime
+    const next = JSON.parse(nextManifest.textContent);
+    if (next.full) { location.assign(url); return; }  // its scripts need a real page load
     epoch++;
     if (source) { source.close(); source = null; }
     queue.length = 0;
     held.length = 0;
     for (const t of timers.values()) clearTimeout(t);
     timers.clear();
-    M = JSON.parse(nextManifest.textContent);
+    M = next;
     rev = M.rev;
     lastSeq = M.seq || 0;
     busy = false;
@@ -648,8 +664,7 @@
       let data = await res.json();
       if (res.status === 403 && data.error?.code === "csrf") {
         // A cached page holds no visitor's token: fetch it once, then retry (the call never ran).
-        const token = await fetch((M.base || "") + "/_rational/csrf", { credentials: "same-origin" });
-        M.csrf = (await token.json()).csrf;
+        await refreshCsrf();
         res = await send();
         data = await res.json();
       }

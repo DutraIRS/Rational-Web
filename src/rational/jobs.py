@@ -11,7 +11,7 @@
     await send_receipt.enqueue_in(60, 42)     # in a minute
 
     @jobs.every(hours=1)
-    async def clean_up() -> None: ...         # once an hour, on one worker
+    async def clean_up() -> None: ...         # at the start of every hour, on one worker
 
 Arguments are stored as JSON and validated against the function's annotations when the job runs.
 Delivery is *at least once*: a job cut off mid-run (a crash, a deploy) runs again once its lease
@@ -24,18 +24,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import heapq
 import inspect
+import itertools
 import json
 import logging
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, ParamSpec, Protocol, TypeVar
 
 import anyio.to_thread
 from pydantic import validate_call
 from pydantic_core import to_jsonable_python
+
+from .concurrency import cancel_and_wait
 
 if TYPE_CHECKING:
     from .app import App
@@ -44,6 +48,8 @@ log = logging.getLogger("rational.jobs")
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+ONCE_SWEEP_SECONDS = 60.0
 
 
 class JobStore(Protocol):
@@ -66,36 +72,38 @@ class MemoryJobStore:
     """Jobs in this process's memory: for development, tests and single-worker apps."""
 
     def __init__(self) -> None:
-        self.queued: dict[bytes, float] = {}
+        self.queued: list[tuple[float, int, bytes]] = []  # a heap: the job due first comes first
         self.leased: dict[bytes, float] = {}
         self._once: dict[str, float] = {}
+        self._once_swept = 0.0
+        self._order = itertools.count()
 
     async def push(self, record: bytes, due: float) -> None:
-        self.queued[record] = due
+        heapq.heappush(self.queued, (due, next(self._order), record))
 
     async def claim(self, now: float, lease: float) -> bytes | None:
         for record, until in list(self.leased.items()):  # leases that ran out: queue again
             if until <= now:
                 del self.leased[record]
-                self.queued[record] = now
-        due = [(at, record) for record, at in self.queued.items() if at <= now]
-        if not due:
+                await self.push(record, now)
+        if not self.queued or self.queued[0][0] > now:
             return None
-        record = min(due)[1]
-        del self.queued[record]
+        record = heapq.heappop(self.queued)[2]
         self.leased[record] = now + lease
         return record
 
     async def release(self, record: bytes, retry: bytes | None = None, due: float = 0.0) -> None:
         self.leased.pop(record, None)
         if retry is not None:
-            self.queued[retry] = due
+            await self.push(retry, due)
 
     async def once(self, key: str, ttl: float) -> bool:
         now = time.time()
         if self._once.get(key, 0.0) > now:
             return False
-        self._once = {k: v for k, v in self._once.items() if v > now}
+        if now - self._once_swept > ONCE_SWEEP_SECONDS:
+            self._once_swept = now
+            self._once = {k: v for k, v in self._once.items() if v > now}
         self._once[key] = now + ttl
         return True
 
@@ -175,9 +183,9 @@ class Job(Generic[P, R]):
         """Queue a run with these arguments and return its id."""
         return await self.jobs._push(self, 0.0, args, kwargs)
 
-    def enqueue_in(self, seconds: float, *args: P.args, **kwargs: P.kwargs) -> Awaitable[str]:
+    async def enqueue_in(self, seconds: float, *args: P.args, **kwargs: P.kwargs) -> str:
         """Queue a run in ``seconds`` seconds and return its id."""
-        return self.jobs._push(self, seconds, args, kwargs)
+        return await self.jobs._push(self, seconds, args, kwargs)
 
     async def _run(self, args: list[Any], kwargs: dict[str, Any]) -> None:
         if inspect.iscoroutinefunction(self.fn):
@@ -211,6 +219,8 @@ class Jobs:
         self.registry: dict[str, Job[Any, Any]] = {}
         self._schedules: list[tuple[Job[Any, Any], float]] = []
         self._workers: list[asyncio.Task[None]] = []
+        self._ticks: list[asyncio.Task[None]] = []
+        self._store_down = False
         self._wake: asyncio.Event | None = None  # made in start(), on the loop that runs the workers
         self._stopping = False
         self.app = app
@@ -238,7 +248,8 @@ class Jobs:
     ) -> Callable[[Callable[[], R]], Job[[], R]]:
         """Run a function with no arguments once per interval, on one worker of all the app's processes.
 
-        Intervals are counted from the Unix epoch, so ``hours=24`` runs at midnight UTC.
+        Intervals are counted from the Unix epoch, so ``hours=24`` runs at midnight UTC. Starting the
+        app does not run it, and a moment when no worker is up is skipped, as with cron.
         """
         interval = seconds + 60 * minutes + 3600 * hours + 86400 * days
         if interval <= 0:
@@ -267,19 +278,19 @@ class Jobs:
         self._stopping = False
         self._wake = asyncio.Event()
         self._workers = [asyncio.create_task(self._work()) for _ in range(self.concurrency)]
-        self._workers += [asyncio.create_task(self._tick(job, every)) for job, every in self._schedules]
+        self._ticks = [asyncio.create_task(self._tick(job, every)) for job, every in self._schedules]
 
     async def stop(self, grace: float = 10.0) -> None:
         """Stop taking jobs, let running ones finish for up to ``grace`` seconds, then cancel them."""
         self._stopping = True
         if self._wake is not None:
             self._wake.set()
+        ticks, self._ticks = self._ticks, []
+        await cancel_and_wait(ticks)
         workers, self._workers = self._workers, []
         if workers:
             _, pending = await asyncio.wait(workers, timeout=grace)
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_and_wait(pending)
 
     async def run_pending(self) -> int:
         """Run every job that is due now, in this task, and return how many ran (for tests and scripts)."""
@@ -291,61 +302,74 @@ class Jobs:
 
     async def _work(self) -> None:
         while not self._stopping:
-            record = await self.store.claim(time.time(), self.lease)
-            if record is None:
-                assert self._wake is not None
-                self._wake.clear()
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._wake.wait(), self.poll)
-                continue
-            await self._handle(record)
+            try:
+                record = await self.store.claim(time.time(), self.lease)
+                if self._store_down:
+                    self._store_down = False
+                    log.warning("the job store is back")
+                if record is not None:
+                    await self._handle(record)
+                    continue
+            except Exception:  # the store is down, say: a job left unfinished runs again when its lease ends
+                if not self._store_down:  # once per outage: workers retry many times a minute
+                    self._store_down = True
+                    log.exception("could not run jobs; trying again until it works")
+            assert self._wake is not None
+            self._wake.clear()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), self.poll)
 
     async def _tick(self, job: Job[Any, Any], every: float) -> None:
-        while not self._stopping:
-            slot = int(time.time() // every)
-            if await self.store.once(f"{job.name}:{slot}", every):
-                await job.enqueue()
-            await asyncio.sleep((slot + 1) * every - time.time())
+        while True:
+            slot = int(time.time() // every) + 1
+            await asyncio.sleep(slot * every - time.time())
+            try:
+                if await self.store.once(f"{job.name}:{slot}", every):
+                    await job.enqueue()
+            except Exception:
+                log.exception("could not schedule job %s; trying again next time", job.name)
 
     async def _handle(self, record: bytes) -> None:
-        data = json.loads(record)
-        job = self.registry.get(data["job"])
+        try:
+            data = json.loads(record)
+            job, args, kwargs = self.registry.get(data["job"]), data["args"], data["kwargs"]
+            attempt = data["attempt"] + 1
+        except (ValueError, KeyError, TypeError):
+            log.error("dropped an unreadable job: %r", record[:200])
+            await self.store.release(record)
+            return
         if job is None:
-            log.error("job %s (%s) is not registered in this process; dropped", data["job"], data["id"])
+            log.error("job %s (%s) is not registered in this process; dropped", data["job"], data.get("id"))
             await self.store.release(record)
             return
         try:
-            await job._run(data["args"], data["kwargs"])
+            await job._run(args, kwargs)
         except asyncio.CancelledError:
             raise  # stopping: the lease runs out and another worker takes the job
         except Exception as exc:
-            attempt = data["attempt"] + 1
-            if attempt > job.retries:
-                log.exception("job %s (%s) failed after %d attempts", job.name, data["id"], attempt)
-                await self._report(exc, data, job, attempt, final=True)
+            final = attempt > job.retries
+            await self._report(exc, data, job, attempt, final)
+            if final:
                 await self.store.release(record)
                 return
-            log.warning("job %s (%s) failed, retry %d of %d", job.name, data["id"], attempt, job.retries, exc_info=True)
-            await self._report(exc, data, job, attempt)
             retry = _dump({**data, "attempt": attempt})
             await self.store.release(record, retry, time.time() + job.backoff**attempt)
             return
         await self.store.release(record)
 
     async def _report(
-        self, exc: BaseException, data: dict[str, Any], job: Job[Any, Any], attempt: int, *, final: bool = False
+        self, exc: BaseException, data: dict[str, Any], job: Job[Any, Any], attempt: int, final: bool
     ) -> None:
-        """Send a failed job to ``app.on_error`` hooks, when the app has any."""
-        if self.app is None or not self.app._error_hooks:
-            return
-        from .errors import ErrorInfo
-
-        info = ErrorInfo(
-            exc,
-            "job",
-            extra={"job": data["job"], "id": data["id"], "attempt": attempt, "final": final},
-        )
-        await self.app._run_error_hooks(info)
+        """Log a failed run and send it to the ``app.on_error`` hooks, when there is an app."""
+        job_id = data.get("id")
+        outcome = f"failed after {attempt} attempts" if final else f"failed, retry {attempt} of {job.retries}"
+        message, level = f"job {job.name} ({job_id}) {outcome}", logging.ERROR if final else logging.WARNING
+        if self.app is None:
+            log.log(level, message, exc_info=(type(exc), exc, exc.__traceback__))
+        else:
+            await self.app.report_error(
+                exc, "job", message, level=level, job=job.name, id=job_id, attempt=attempt, final=final
+            )
 
 
 def _dump(record: dict[str, Any]) -> bytes:

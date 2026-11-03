@@ -1,6 +1,7 @@
 """Development mode (readable errors, live reload) and the command line."""
 
 import sys
+import threading
 from pathlib import Path
 
 import anyio
@@ -240,3 +241,43 @@ def test_load_target_by_module_string(monkeypatch):
     assert isinstance(app, App) and target[:2] == ("app", "app")
     forget_project_modules(EXAMPLES / "counter")
     sys.modules.pop("app", None)
+
+
+def test_every_public_name_of_the_package_exists():
+    import rational
+
+    assert sorted(rational.__all__) == list(rational.__all__)
+    for name in rational.__all__:
+        assert getattr(rational, name) is not None
+
+
+def test_a_file_deleted_while_watching_counts_as_a_change(tmp_path):
+    from rational.cli import _poll
+
+    keep, gone = tmp_path / "keep.py", tmp_path / "gone.py"
+    keep.write_text("x = 1")
+    gone.write_text("x = 2")
+    watcher = _poll(tmp_path, 0.001)
+    deleter = threading.Timer(0.02, gone.unlink)
+    deleter.start()
+    assert next(watcher) == "gone.py"
+    deleter.join()
+
+
+def test_the_servers_do_not_wait_for_ever_on_open_streams(monkeypatch):
+    seen = {}
+    monkeypatch.setattr("uvicorn.run", lambda app, **options: seen.update(options))
+    cli.serve(App(), ["--prod"])
+    assert seen["timeout_graceful_shutdown"] == 30
+    cli.serve(App(), ["--dev", "--no-reload"])
+    assert seen["timeout_graceful_shutdown"] == 1
+    cli.serve(App(), ["--prod"], timeout_graceful_shutdown=5)
+    assert seen["timeout_graceful_shutdown"] == 5
+
+
+def test_an_import_error_in_the_app_is_not_blamed_on_alembic(tmp_path, monkeypatch):
+    (tmp_path / "brokenapp.py").write_text("import no_such_module_at_all\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(ImportError, match="no_such_module_at_all"):
+        cli.main(["db", "upgrade", "brokenapp.py"])

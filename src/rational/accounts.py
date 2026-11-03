@@ -23,8 +23,12 @@ your pages and services::
 
 Links are signed with the app's secret key and expire. A reset link is tied to the current password,
 so it works once; a verification link is tied to the address; a sign-in link works once. The
-``send_*`` methods answer the same whether or not an account exists, and send at most one message
-per address and purpose every ``resend_after`` seconds.
+``send_*`` methods answer the same whether or not an account exists, and in the same time: they
+never wait for a mail server. They send at most one message per address and purpose every
+``resend_after`` seconds.
+
+Mail scanners open links to check them, so a page at a sign-in link should ask for a click before
+calling ``sign_in``: opening the link must not use it up.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ from .components.basic import ButtonLink, Heading, Text
 from .components.layout import Column
 from .errors import FieldError
 from .jobs import JobStore, MemoryJobStore
-from .security import InvalidToken, Signer, hash_password
+from .security import InvalidToken, Signer, ahash_password
 
 if TYPE_CHECKING:
     from .app import App
@@ -139,7 +143,7 @@ class Accounts:
         if len(password) < self.min_password_length:
             raise FieldError("password", f"Use at least {self.min_password_length} characters")
         user = await self._check("reset", token, self.reset_ttl, self.password_of)
-        await self.save_password(user, hash_password(password))
+        await self.save_password(user, await ahash_password(password))
         return user
 
     async def send_verification(self, user: Any) -> None:
@@ -200,4 +204,8 @@ class Accounts:
 
     async def _send(self, user: Any, message: tuple[str, Node]) -> None:
         subject, body = message
-        await self.mailer.send(self.email_of(user), subject, body)
+        sending = self.mailer.send(self.email_of(user), subject, body)
+        if self.mailer.waits:
+            self.app._spawn(sending)  # how long a mail server takes must not tell who has an account
+        else:
+            await sending

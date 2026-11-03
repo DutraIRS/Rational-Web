@@ -11,7 +11,6 @@ user-platform/
 │   ├── user.py                # the User table, UserOut (no password hash!), roles
 │   └── forms.py               # sign-up, sign-in, profile and password forms
 ├── services/
-│   ├── security.py            # scrypt password hashing, safe redirects
 │   ├── auth.py                # current_user: loads the signed-in user per request
 │   ├── accounts.py            # AccountService (+ JSON API)
 │   └── admin.py               # AdminService (+ JSON API)
@@ -27,8 +26,9 @@ user-platform/
 
 ## What it shows
 
-- **Passwords done right:** `hashlib.scrypt` from the standard library, a random salt per password,
-  constant-time comparison, and one error message for "wrong email" and "wrong password".
+- **Passwords done right:** `rational.security` hashes them with scrypt off the event loop, with a
+  random salt per password, and takes the same time and gives one error message for "wrong email"
+  and "wrong password".
 - **A custom authenticator:** `app.authenticate(current_user)` loads the user from the database on every
   request, so a role change or a deleted account takes effect immediately.
 - **`FieldError`:** business rules ("this email is already registered", "that is not your current

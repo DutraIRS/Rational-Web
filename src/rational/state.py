@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import copy
 import inspect
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
-from pydantic import TypeAdapter, ValidationError
-
-from ._tracking import Cell, changed, reads, track_read, version
+from ._tracking import Cell, reads, track_read
 
 if TYPE_CHECKING:
     from .component import Component
@@ -103,7 +102,6 @@ class State(Generic[T]):
     def notify(self, instance: Component, cell: Cell | None = None, old: Any = MISSING) -> None:
         if cell is None:
             cell = self._locate(instance)[2]
-        changed()
         if self.scope == "session":
             instance.context.session.bump()
         runtime = instance._rw_runtime
@@ -120,9 +118,11 @@ class State(Generic[T]):
         if raw is None:
             return self._initial()
         try:
-            value: T = TypeAdapter(type(self.default)).validate_python(raw)
-        except ValidationError:
+            value: T = convert_like(raw, self.default)
+        except ValueError:
             return self._initial()  # a hand-edited or outdated link: start from the default
+        if isinstance(value, float) and not math.isfinite(value):
+            return self._initial()
         return value
 
     def _initial(self) -> T:
@@ -161,22 +161,39 @@ def restorable(component: Any, kind: str, saved: dict[str, Any]) -> dict[str, An
     cls = type(component)
     if kind != class_name(cls):
         raise StateMismatch(f"{kind} was saved where {class_name(cls)} now is")
-    states = {
-        name: attr
-        for klass in reversed(cls.__mro__)
-        for name, attr in vars(klass).items()
-        if isinstance(attr, State) and attr.scope == "component"
-    }
+    states = _states(cls, "component")
     for name, value in saved.items():
         state = states.get(name)
         if state is None:
             raise StateMismatch(f"{cls.__name__}.{name} is no longer a State")
-        expected = state._initial()
-        if expected is not None and value is not None and not _same_kind(expected, value):
-            raise StateMismatch(
-                f"{cls.__name__}.{name} now holds {type(expected).__name__}, not {type(value).__name__}"
-            )
+        _check_fits(state, cls, value)
     return saved
+
+
+def check_page_state(component: Any, saved: dict[str, Any]) -> None:
+    """Raise ``StateMismatch`` if a saved page-scoped value no longer fits ``component``'s code."""
+    cls = type(component)
+    for state in _states(cls, "page").values():
+        key = state._locate(component)[1]
+        if key in saved:
+            _check_fits(state, cls, saved[key])
+
+
+def _states(cls: type, scope: Scope) -> dict[str, State[Any]]:
+    return {
+        name: attr
+        for klass in reversed(cls.__mro__)
+        for name, attr in vars(klass).items()
+        if isinstance(attr, State) and attr.scope == scope
+    }
+
+
+def _check_fits(state: State[Any], cls: type, value: Any) -> None:
+    expected = state._initial()
+    if expected is not None and value is not None and not _same_kind(expected, value):
+        raise StateMismatch(
+            f"{cls.__name__}.{state.name} now holds {type(expected).__name__}, not {type(value).__name__}"
+        )
 
 
 def _same_kind(expected: Any, value: Any) -> bool:
@@ -208,8 +225,9 @@ class computed(Generic[T]):  # noqa: N801 - used as a decorator, like property
         def total(self) -> int:
             return sum(item.price for item in self.items)
 
-    The cache is shared by every read until any state, session data or props change. Components that
-    read it re-render when the state it used changes, exactly as if they had read that state.
+    The cache is shared by every read until any state or props on the page, or the session's data,
+    change. Components that read it re-render when the state it used changes, exactly as if they had
+    read that state. Before the component is mounted, every read calculates the value afresh.
     """
 
     def __init__(self, fn: Callable[[Any], T]) -> None:
@@ -228,9 +246,10 @@ class computed(Generic[T]):  # noqa: N801 - used as a decorator, like property
     def __get__(self, instance: object | None, owner: type) -> computed[T] | T:
         if instance is None:
             return self
-        cache: dict[str, tuple[int, Any, set[Cell]]] = instance.__dict__.setdefault("_rw_computed", {})
+        cache: dict[str, tuple[Any, Any, set[Cell]]] = instance.__dict__.setdefault("_rw_computed", {})
+        stamp = _changes_seen(instance)
         hit = cache.get(self.name)
-        if hit is not None and hit[0] == version.value:
+        if hit is not None and stamp is not None and hit[0] == stamp:
             for cell in hit[2]:  # the reader depends on what the value was computed from
                 track_read(cell)
             return hit[1]  # type: ignore[no-any-return]
@@ -242,8 +261,17 @@ class computed(Generic[T]):  # noqa: N801 - used as a decorator, like property
             reads.reset(token)
         for cell in cells:  # nested computed values collected into ``cells``; the outer reader still tracks
             track_read(cell)
-        cache[self.name] = (version.value, value, cells)
+        cache[self.name] = (stamp, value, cells)
         return value
+
+
+def _changes_seen(instance: object) -> tuple[int, int] | None:
+    """Changes so far to what a computed value may read: its page and its session. ``None`` if unmounted."""
+    runtime = getattr(instance, "_rw_runtime", None)
+    if runtime is None:
+        return None
+    session = runtime.context.peek_session()
+    return runtime.changes, -1 if session is None else session.revision
 
 
 def watch(*names: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:

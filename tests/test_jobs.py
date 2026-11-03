@@ -1,6 +1,7 @@
 """Background jobs: queueing, validation, retries, leases, schedules, and both stores."""
 
 import asyncio
+import inspect
 import os
 import time
 import uuid
@@ -138,7 +139,7 @@ async def test_schedules_run_once_per_interval_across_workers():
     await asyncio.sleep(0.5)
     for jobs in workers:
         await jobs.stop()
-    slots = int(time.time() // 0.2) - int(started // 0.2) + 1  # intervals the test touched
+    slots = int(time.time() // 0.2) - int(started // 0.2)  # intervals that began during the test
     assert 1 <= len(runs) <= slots  # at most one run per interval, not one per worker
 
     with pytest.raises(ValueError, match="positive interval"):
@@ -150,3 +151,95 @@ def test_jobs_settings_are_checked():
         Jobs(concurrency=0)
     with pytest.raises(ValueError, match="redis client or url"):
         RedisJobStore()
+
+
+async def test_schedules_wait_for_their_interval_and_do_not_run_at_startup():
+    jobs = Jobs(poll=0.01)
+    runs = []
+
+    @jobs.every(hours=1)
+    async def hourly() -> None:
+        runs.append(True)
+
+    await jobs.start()
+    await asyncio.sleep(0.05)
+    started = time.monotonic()
+    await jobs.stop()
+    assert runs == [] and time.monotonic() - started < 1  # and a sleeping schedule does not delay stopping
+
+
+async def test_workers_and_schedules_survive_a_store_outage(caplog):
+    class Flaky(MemoryJobStore):
+        down = True
+
+        async def claim(self, now, lease):
+            if self.down:
+                raise ConnectionError("the store is down")
+            return await super().claim(now, lease)
+
+        async def once(self, key, ttl):
+            if self.down:
+                raise ConnectionError("the store is down")
+            return await super().once(key, ttl)
+
+    store = Flaky()
+    jobs = Jobs(store=store, poll=0.001)
+    done = asyncio.Event()
+    ticks = asyncio.Event()
+
+    @jobs.job()
+    async def work() -> None:
+        done.set()
+
+    @jobs.every(seconds=0.02)
+    async def tick() -> None:
+        ticks.set()
+
+    await work.enqueue()
+    await jobs.start()
+    await asyncio.sleep(0.05)  # every attempt so far failed
+    assert not done.is_set() and not ticks.is_set()
+    assert caplog.text.count("could not run jobs") == 1  # many attempts, one report
+    store.down = False
+    async with asyncio.timeout(3):
+        await done.wait()
+        await ticks.wait()
+    await jobs.stop()
+
+
+async def test_unreadable_records_are_dropped(caplog):
+    store = MemoryJobStore()
+    for record in (b"not json", b"[1, 2]", b'{"job": "x"}'):
+        await store.push(record, 0.0)
+    jobs = Jobs(store=store)
+    assert await jobs.run_pending() == 3
+    assert "unreadable" in caplog.text and not store.queued and not store.leased
+
+
+async def test_jobs_run_in_the_order_they_are_due():
+    store = MemoryJobStore()
+    for record, due in ((b"late", 3.0), (b"first", 1.0), (b"second", 2.0), (b"future", 9.0)):
+        await store.push(record, due)
+    assert [await store.claim(5.0, 60.0) for _ in range(4)] == [b"first", b"second", b"late", None]
+
+
+async def test_enqueue_in_is_a_coroutine_like_enqueue():
+    jobs = Jobs()
+
+    @jobs.job()
+    async def later(n: int) -> None: ...
+
+    assert inspect.iscoroutinefunction(later.enqueue_in)
+    assert isinstance(await later.enqueue_in(60, 1), str)
+    assert await jobs.run_pending() == 0
+
+
+async def test_keys_of_once_are_forgotten_only_now_and_then(monkeypatch):
+    store = MemoryJobStore()
+    assert await store.once("a", 0.001)
+    await asyncio.sleep(0.01)
+    assert await store.once("a", 60)
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now + 120)
+    assert await store.once("b", 60)
+    assert "a" not in store._once and "b" in store._once

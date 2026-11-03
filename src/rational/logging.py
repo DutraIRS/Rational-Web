@@ -86,6 +86,8 @@ class Logging:
 
     def record(self, event: str, *, level: int = std_logging.INFO, **fields: Any) -> None:
         """Emit one structured standard-library log record and span event."""
+        if not self._opentelemetry and not self.logger.isEnabledFor(level):
+            return
         request_id = self.request_id
         extra = {
             "rational_event": event,

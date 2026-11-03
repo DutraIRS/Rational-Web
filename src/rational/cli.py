@@ -16,12 +16,14 @@ HTML (see :mod:`rational.export`).
 
 ``rational new NAME`` writes a small runnable project (see :mod:`rational.scaffold`).
 
-Page views live in process memory, so ``--workers`` > 1 needs sticky sessions.
+Page views live in process memory, so ``--workers`` > 1 needs sticky sessions or page snapshots
+(``App(page_snapshots=...)``).
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import importlib.util
 import os
@@ -40,6 +42,8 @@ if TYPE_CHECKING:
 Target = tuple[str, str, str]  # (module, attribute, directory) to re-import the app in a child process
 
 SUPERVISED_ENV = "RATIONAL_SUPERVISED"
+# Seconds open connections get when the server stops: a live stream would otherwise hold it up forever.
+GRACEFUL_SECONDS = {"dev": 1, "prod": 30}
 
 
 class TargetError(Exception):
@@ -68,7 +72,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", help="bind address (dev: 127.0.0.1, prod: $HOST or 0.0.0.0)")
     parser.add_argument("--port", type=int, help="port (default: $PORT or 8000)")
-    parser.add_argument("--workers", type=int, default=1, help="prod only; >1 requires sticky sessions")
+    parser.add_argument("--workers", type=int, default=1, help="prod only; >1 needs sticky sessions or page snapshots")
     parser.add_argument("--root-path", default="", help="URL prefix when served under a sub-path by a proxy")
     parser.add_argument("--no-reload", action="store_true", help="dev only: disable auto-reload")
     parser.add_argument("--log-level", default=None, help="uvicorn log level (default: info)")
@@ -119,6 +123,7 @@ def serve(app: App, argv: Sequence[str] | None = None, *, target: Target | None 
     target = target or _main_target(app)
     port = overrides.pop("port", None) or args.port or int(os.environ.get("PORT", 8000))
     options: dict[str, Any] = {"port": port, "root_path": args.root_path, "log_level": args.log_level or "info"}
+    overrides.setdefault("timeout_graceful_shutdown", GRACEFUL_SECONDS[mode])
     run = _serve_dev if mode == "dev" else _serve_prod
     run(app, args, target, options, overrides)
 
@@ -163,8 +168,8 @@ def _serve_prod(
     )
     notes = [f"pages at /, API at {app.api_prefix}, assets at /_rational"]
     notes += _api_note(app, options["host"], options["port"])
-    if args.workers > 1:
-        notes.append(f"{args.workers} workers: page sessions are per process, so use sticky sessions")
+    if args.workers > 1 and app.resume is None:
+        notes.append(f"{args.workers} workers: page views are per process, so use sticky sessions or page snapshots")
     _banner("production", options["host"], options["port"], notes)
     if args.workers <= 1:
         uvicorn.run(app, **options, **overrides)
@@ -238,6 +243,10 @@ def _db(argv: Sequence[str]) -> None:
             migrations.current(db, args.directory)
         else:
             migrations.history(db, args.directory)
+    except ImportError as exc:
+        if (exc.name or "").partition(".")[0] not in ("alembic", "sqlalchemy"):
+            raise  # the app's own import failed: its traceback says more than a hint could
+        raise SystemExit(f"rational db: {exc}; pip install 'rational[migrations]'") from None
     except (TargetError, migrations.MigrationError) as exc:
         raise SystemExit(f"rational db: {exc}") from None
 
@@ -343,8 +352,12 @@ def watch(directory: str, interval: float = 0.4) -> Iterator[str]:
 
 def _poll(root: Path, interval: float) -> Iterator[str]:
     def snapshot() -> dict[Path, float]:
-        files = (p for p in root.rglob("*.py") if not _IGNORED_DIRS.intersection(p.relative_to(root).parts))
-        return {p: p.stat().st_mtime for p in files}
+        times = {}
+        for path in root.rglob("*.py"):
+            if not _IGNORED_DIRS.intersection(path.relative_to(root).parts):
+                with contextlib.suppress(OSError):  # deleted a moment ago
+                    times[path] = path.stat().st_mtime
+        return times
 
     before = snapshot()
     while True:

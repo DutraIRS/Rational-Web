@@ -3,7 +3,8 @@
 Everything here uses the standard library except encryption, which needs the ``cryptography``
 package (``pip install "rational[crypto]"``):
 
-* :func:`hash_password` / :func:`verify_password`: scrypt with a random salt per password.
+* :func:`hash_password` / :func:`verify_password`: scrypt with a random salt per password, and
+  :func:`ahash_password` / :func:`averify_password` to use them without stopping the event loop.
 * :class:`Tokens`: JSON Web Tokens signed with HMAC-SHA256 (``HS256``), with expiry, for APIs and
   mobile clients. :meth:`Tokens.authenticator` plugs them into ``app.authenticate``.
 * :class:`Signer`: tamper-proof (not secret) values, optionally expiring: signed cookies, links in
@@ -15,24 +16,44 @@ Secrets must be long and random: ``python -c "import secrets; print(secrets.toke
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .context import Context
 
 MIN_SECRET_BYTES = 32
-_SCRYPT = {"n": 2**14, "r": 8, "p": 1}
+# OWASP rates these settings equal to n=2**17, p=1, at an eighth of the memory (16 MiB per password).
+_SCRYPT = {"n": 2**14, "r": 8, "p": 5}
+_SCRYPT_MAX_MEMORY = 256 * 1024 * 1024  # verifies passwords hashed with stronger settings too
+# Hashing is slow and memory-hungry on purpose, so a burst of sign-ins waits here instead of exhausting the server.
+_hashing = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1), thread_name_prefix="rational-password")
 
 
 class InvalidToken(ValueError):  # noqa: N818 - reads naturally: except InvalidToken
     """A token or signed value that is malformed, forged or expired."""
+
+
+def same_text(a: str, b: str) -> bool:
+    """``a == b`` in constant time, for any text: a forged value with non-ASCII characters is just unequal.
+
+    ``hmac.compare_digest`` raises ``TypeError`` for such strings, which would turn a tampered
+    cookie, token or header into a server error.
+    """
+    return hmac.compare_digest(_encoded(a), _encoded(b))
+
+
+def _encoded(text: str) -> bytes:
+    return text.encode("utf-8", "surrogatepass")
 
 
 def _secret(secret: str | bytes, what: str) -> bytes:
@@ -57,26 +78,49 @@ def _unb64(text: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-    """``scrypt$n$r$p$<salt>$<hash>``: store this, never the password."""
+    """``scrypt$n$r$p$<salt>$<hash>``: store this, never the password.
+
+    Slow on purpose (a quarter of a second or so): in ``async`` code use :func:`ahash_password`.
+    """
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, **_SCRYPT)
+    digest = hashlib.scrypt(_encoded(password), salt=salt, **_SCRYPT)
     return f"scrypt${_SCRYPT['n']}${_SCRYPT['r']}${_SCRYPT['p']}${salt.hex()}${digest.hex()}"
 
 
-def verify_password(password: str, stored: str) -> bool:
-    """True if ``password`` matches ``stored``. Takes the same time whether or not it matches."""
+def verify_password(password: str, stored: str | None) -> bool:
+    """True if ``password`` matches ``stored``. Takes the same time whether or not it matches.
+
+    Pass ``None`` when there is no such user: it does the same work and returns ``False``, so the
+    time a failed sign-in takes does not tell who has an account. Slow on purpose: in ``async``
+    code use :func:`averify_password`.
+    """
+    if stored is None:
+        hash_password(password)
+        return False
     try:
         scheme, n, r, p, salt, digest = stored.split("$")
         if scheme != "scrypt":
             return False
-        candidate = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p))
+        candidate = hashlib.scrypt(
+            _encoded(password), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), maxmem=_SCRYPT_MAX_MEMORY
+        )
         return hmac.compare_digest(candidate, bytes.fromhex(digest))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return False
 
 
+async def ahash_password(password: str) -> str:
+    """:func:`hash_password` on a worker thread, so other requests keep running meanwhile."""
+    return await asyncio.get_running_loop().run_in_executor(_hashing, hash_password, password)
+
+
+async def averify_password(password: str, stored: str | None) -> bool:
+    """:func:`verify_password` on a worker thread, so other requests keep running meanwhile."""
+    return await asyncio.get_running_loop().run_in_executor(_hashing, verify_password, password, stored)
+
+
 def password_needs_rehash(stored: str) -> bool:
-    """True if ``stored`` used weaker parameters than today's: re-hash it after a successful sign-in."""
+    """True if ``stored`` used other parameters than today's: re-hash it after a successful sign-in."""
     parts = stored.split("$")
     return len(parts) != 6 or parts[0] != "scrypt" or parts[1:4] != [str(v) for v in _SCRYPT.values()]
 
@@ -110,7 +154,7 @@ class Signer:
     def unsign(self, token: str, *, max_age: float | None = None) -> Any:
         """The value, if ``token`` is intact (and younger than ``max_age`` seconds); else ``InvalidToken``."""
         payload, _, mac = token.rpartition(".")
-        if not payload or not any(hmac.compare_digest(mac, candidate) for candidate in self._macs(payload.encode())):
+        if not payload or not any(same_text(mac, candidate) for candidate in self._macs(_encoded(payload))):
             raise InvalidToken("bad signature")
         try:
             signed_at, value = json.loads(_unb64(payload))
@@ -200,7 +244,8 @@ class Tokens:
 
     def issue(self, subject: str, *, ttl: float | None = None, **claims: Any) -> str:
         now = int(time.time())
-        body: dict[str, Any] = {**claims, "sub": subject, "iat": now, "exp": now + int(ttl or self.ttl)}
+        lifetime = self.ttl if ttl is None else ttl
+        body: dict[str, Any] = {**claims, "sub": subject, "iat": now, "exp": now + int(lifetime)}
         if self.issuer is not None:
             body["iss"] = self.issuer
         header = _b64(b'{"alg":"HS256","typ":"JWT"}')
@@ -214,9 +259,9 @@ class Tokens:
             header_b64, payload_b64, mac = token.split(".")
         except ValueError as e:
             raise InvalidToken("malformed") from e
-        signed = f"{header_b64}.{payload_b64}".encode()
+        signed = _encoded(f"{header_b64}.{payload_b64}")
         expected = [_b64(hmac.new(key, signed, hashlib.sha256).digest()) for key in self._keys]
-        if not any(hmac.compare_digest(mac, candidate) for candidate in expected):
+        if not any(same_text(mac, candidate) for candidate in expected):
             raise InvalidToken("bad signature")
         try:
             header, claims = json.loads(_unb64(header_b64)), json.loads(_unb64(payload_b64))
