@@ -280,6 +280,12 @@ def test_captcha_script_loads_only_on_pages_that_use_it():
         assert any(part.startswith(directive) and "https://*.hcaptcha.com" in part for part in policy.split("; "))
 
 
+def test_recaptcha_policy_has_what_google_lists():
+    app = App()
+    Captcha(app, "recaptcha", site_key="k", secret="s")
+    assert app.csp_sources["connect-src"] == ["https://www.google.com"]
+
+
 def test_too_many_requests_says_when_to_come_back():
     class Api(Service):
         @remote

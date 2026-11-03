@@ -220,6 +220,7 @@ class Jobs:
         self._schedules: list[tuple[Job[Any, Any], float]] = []
         self._workers: list[asyncio.Task[None]] = []
         self._ticks: list[asyncio.Task[None]] = []
+        self._store_down = False
         self._wake: asyncio.Event | None = None  # made in start(), on the loop that runs the workers
         self._stopping = False
         self.app = app
@@ -303,11 +304,16 @@ class Jobs:
         while not self._stopping:
             try:
                 record = await self.store.claim(time.time(), self.lease)
+                if self._store_down:
+                    self._store_down = False
+                    log.warning("the job store is back")
                 if record is not None:
                     await self._handle(record)
                     continue
             except Exception:  # the store is down, say: a job left unfinished runs again when its lease ends
-                log.exception("could not run jobs; trying again shortly")
+                if not self._store_down:  # once per outage: workers retry many times a minute
+                    self._store_down = True
+                    log.exception("could not run jobs; trying again until it works")
             assert self._wake is not None
             self._wake.clear()
             with contextlib.suppress(TimeoutError):

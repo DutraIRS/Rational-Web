@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0a2] - 2026-11-02
+
 A full audit: fixes for what it found, and the features it found half done. Three of the bugs
 (a Redis bus that could hang the server, sockets subscribing twice, the session id in form pages)
 came with changes that were never released.

@@ -31,8 +31,8 @@ A container image:
 
 .. important::
 
-   Live page state is kept in the server's memory. Run one process per container, or enable
-   sticky sessions when you run several.
+   Live page state is kept in the server's memory. Run one process per container, or use sticky
+   sessions or page snapshots when you run several.
 
 :doc:`../running` covers the other options: any ASGI server, ``python -m rational``,
 mounting inside an existing FastAPI app, sub-paths behind a proxy and Content Security Policy.

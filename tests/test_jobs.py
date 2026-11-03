@@ -168,7 +168,7 @@ async def test_schedules_wait_for_their_interval_and_do_not_run_at_startup():
     assert runs == [] and time.monotonic() - started < 1  # and a sleeping schedule does not delay stopping
 
 
-async def test_workers_and_schedules_survive_a_store_outage():
+async def test_workers_and_schedules_survive_a_store_outage(caplog):
     class Flaky(MemoryJobStore):
         down = True
 
@@ -199,6 +199,7 @@ async def test_workers_and_schedules_survive_a_store_outage():
     await jobs.start()
     await asyncio.sleep(0.05)  # every attempt so far failed
     assert not done.is_set() and not ticks.is_set()
+    assert caplog.text.count("could not run jobs") == 1  # many attempts, one report
     store.down = False
     async with asyncio.timeout(3):
         await done.wait()

@@ -150,22 +150,22 @@ an equivalent *pre-built* HTML string. Measured on Python 3.14.7, Windows 11, In
 
 | Scenario | Requests/s | p50 | p95 |
 |---|---:|---:|---:|
-| FastAPI baseline: prebuilt HTML string | 2,651 | 0.35 ms | 0.56 ms |
-| **Rational: static page** | 1,942 | 0.48 ms | 0.76 ms |
-| **Rational: interactive page** (counter) | 1,390 | 0.66 ms | 0.88 ms |
-| **Rational: event round trip** (click → patch) | 1,390 | 0.69 ms | 0.92 ms |
-| Rational: 100-row styled table page | 390 | 2.39 ms | 2.91 ms |
+| FastAPI baseline: prebuilt HTML string | 4,659 | 0.18 ms | 0.38 ms |
+| **Rational: static page** | 1,918 | 0.43 ms | 0.96 ms |
+| **Rational: interactive page** (counter) | 1,322 | 0.59 ms | 1.37 ms |
+| **Rational: event round trip** (click → patch) | 1,454 | 0.60 ms | 1.09 ms |
+| Rational: 100-row styled table page | 342 | 2.70 ms | 3.93 ms |
 
 | On the wire | gzip |
 |---|---:|
-| `runtime.js` (interactive pages only, cached) | 8.3 KiB |
-| Theme CSS (immutable, cached) | 1.2 KiB |
-| A click's response | 0.2 KiB |
+| `runtime.js` (interactive pages only, cached) | 8.8 KiB |
+| Theme CSS (immutable, cached) | 1.6 KiB |
+| A click's response | 0.1 KiB |
 
-- A static page keeps ~73% of raw FastAPI throughput while rendering components and
+- A static page keeps ~41% of raw FastAPI throughput while rendering components and
   compiling CSS.
-- An interaction costs well under 1 ms of server time, so network latency dominates.
-- Rendering costs about 18 µs per element, so pages with thousands of rows should paginate.
+- An interaction costs about 1 ms of server time or less, so network latency dominates.
+- Rendering costs about 23 µs per element, so pages with thousands of rows should paginate.
 
 See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benchmarks.
 
@@ -190,7 +190,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 
 ## Roadmap
 
-**0.1: foundation** *(this release)*
+**0.1: foundation**
 - [x] Component model, `State` scopes, dependency tracking, keyed identity
 - [x] Safe HTML IR and serializer, typed `Style` compiler, four themes, responsive variants
 - [x] HTTP event protocol with morph patches, CSRF, session binding, validation, rate limits
@@ -220,7 +220,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Internationalization
 - [x] Optional Bootstrap and Tailwind adapters
 
-**0.4: client side and production batteries**
+**0.4: client side and production batteries** *(this release)*
 - [x] Client components: Python compiled to JavaScript, rendered by the server first, hydrated in the browser
 - [x] `@computed`, `@watch`, two-way `bind=`, `provide`/`inject`, view transitions
 - [x] Passwords, JSON Web Tokens, signing and encryption (`rational.security`), app cookies

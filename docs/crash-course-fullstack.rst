@@ -23,10 +23,10 @@ The mental model in three sentences
 1. **Your components are server-side Python objects.** Their ``render()`` produces HTML on the
    server, and ``State`` attributes are reactivity roots: writing one marks the components that
    read it dirty, and the server sends back just their HTML.
-2. **The browser is a thin delivery mechanism.** An ~8 KiB runtime wires events to the server,
+2. **The browser is a thin delivery mechanism.** An ~9 KiB runtime wires events to the server,
    applies the HTML patches (preserving focus and caret), and runs the small closed set of
-   ``js.*`` operations locally. There is no client-side component tree, no hydration, no virtual
-   DOM, and no client router.
+   ``js.*`` operations locally. By default there is no client-side component tree, no hydration and
+   no virtual DOM; :doc:`client-components` and ``App(client_nav=True)`` add them where you want them.
 3. **The network boundary is explicit.** Every event handler is a server round trip you can see
    in the network tab. Only methods marked ``@remote`` are addressable as HTTP; nothing else is
    callable from the browser, by accident or otherwise.
@@ -74,7 +74,7 @@ A component, for orientation
 
 Clicking the button ``POST``\s to the server, ``add`` runs *on the server*, and the response
 carries only the card's new HTML. It feels like client-side reactivity; the mechanism is a
-round trip costing well under a millisecond of server time (see :doc:`benchmarks`).
+round trip costing about a millisecond of server time or less (see :doc:`benchmarks`).
 
 Two rules that prevent most confusion:
 

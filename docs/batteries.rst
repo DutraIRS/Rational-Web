@@ -426,6 +426,6 @@ API::
   ``Postmark(server_token)``; ``Console()`` logs messages instead of sending them (development)
   and ``Memory()`` keeps them in ``.outbox`` (tests).
 * With ``jobs=``, ``send`` queues the message and returns; delivery is retried up to five times.
-  Without it, ``send`` waits for the server and raises if it fails. A resend from
-  :class:`~rational.accounts.Accounts` never waits, either way.
+  Without it, ``send`` waits for the server and raises if it fails. Emails sent by
+  :class:`~rational.accounts.Accounts` never make the request wait, either way.
 * Line breaks in addresses and subjects are refused, so a form value cannot add headers.

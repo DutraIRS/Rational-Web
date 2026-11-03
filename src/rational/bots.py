@@ -236,6 +236,7 @@ _PROVIDERS: dict[str, tuple[str, str, str, str, dict[str, list[str]]]] = {
         {
             "script-src": ["https://www.google.com", "https://www.gstatic.com"],
             "frame-src": ["https://www.google.com", "https://recaptcha.google.com"],
+            "connect-src": ["https://www.google.com"],
         },
     ),
 }
