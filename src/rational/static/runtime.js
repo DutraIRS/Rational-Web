@@ -644,6 +644,7 @@
     _runOps: runOps,
     _go: (url) => { if (isSameOrigin(url)) go(url.startsWith("/") ? (M.base || "") + url : url); },
     get _debug() { return Boolean(M.debug); },
+    get _base() { return M.base || ""; },
     /** Call a @remote method: rational.call("todo", "add", {title: "x"}) -> POST /api/todo/add.
      *  Options: {verb: "GET"} for @remote(method="GET"), whose arguments travel as the query string;
      *  {path: "/api/custom"} for a @remote with a custom path. */

@@ -27,8 +27,10 @@ import contextlib
 import importlib
 import importlib.util
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -319,7 +321,11 @@ def load_target(spec: str, app_dir: str | None = None) -> tuple[App, Target]:
 
 
 def supervise(target: Target, args: argparse.Namespace, host: str, port: int) -> None:
-    """Run the app in a child process and restart it whenever a Python file changes."""
+    """Run the app in a child process and restart it whenever a Python file changes.
+
+    Ctrl+C stops the child too. So do SIGTERM and SIGHUP sent to the supervisor alone (``kill``,
+    systemd, ``docker stop``), which would otherwise leave the child serving on the port.
+    """
     module, attr, directory = target
     spec = f"{module}:{attr}" if attr else module
     command = [sys.executable, "-m", "rational", spec, "--app-dir", directory, "--dev", "--no-reload",
@@ -327,16 +333,48 @@ def supervise(target: Target, args: argparse.Namespace, host: str, port: int) ->
     if args.log_level:
         command += ["--log-level", args.log_level]
     env = {**os.environ, DEV_ENV: "1", SUPERVISED_ENV: "1"}
-    child = subprocess.Popen(command, env=env)
-    try:
-        for changed in watch(directory):
-            print(f"  ->  {changed} changed, restarting", flush=True)
+    received: list[int] = []
+    with _interrupt_on_termination(received):
+        child = subprocess.Popen(command, env=env)
+        try:
+            for changed in watch(directory):
+                print(f"  ->  {changed} changed, restarting", flush=True)
+                _stop(child)
+                child = subprocess.Popen(command, env=env)
+        except KeyboardInterrupt:
+            pass
+        finally:
             _stop(child)
-            child = subprocess.Popen(command, env=env)
-    except KeyboardInterrupt:
-        pass
+    for signum in received[:1]:
+        signal.raise_signal(signum)  # the child is gone: now end the way that signal ends a process
+
+
+@contextlib.contextmanager
+def _interrupt_on_termination(received: list[int]) -> Iterator[None]:
+    """On POSIX, turn SIGTERM and SIGHUP into the KeyboardInterrupt that Ctrl+C raises, once.
+
+    Their default action ends the process at once, without the ``finally`` that stops the child.
+    Only signals left at that default are taken (``nohup`` ignores SIGHUP, and so do we). They are
+    appended to ``received``, and the previous handlers are back on exit.
+    """
+    if sys.platform == "win32" or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def interrupt(signum: int, frame: object) -> None:
+        received.append(signum)
+        if len(received) == 1:  # a second signal must not cut the child's shutdown short
+            raise KeyboardInterrupt
+
+    previous = {}
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(signum) is signal.SIG_DFL:
+            previous[signum] = signal.signal(signum, interrupt)
+    try:
+        yield
     finally:
-        _stop(child)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def watch(directory: str, interval: float = 0.4) -> Iterator[str]:
@@ -346,17 +384,26 @@ def watch(directory: str, interval: float = 0.4) -> Iterator[str]:
     except ImportError:
         yield from _poll(Path(directory), interval)
         return
-    for changes in watchfiles.watch(directory, watch_filter=watchfiles.PythonFilter()):
-        yield _relative(sorted(path for _, path in changes)[0], directory)
+    try:
+        for changes in watchfiles.watch(directory, watch_filter=watchfiles.PythonFilter()):
+            yield _relative(sorted(path for _, path in changes)[0], directory)
+    except OSError as exc:
+        # Linux's inotify needs a watch for every folder, .venv and node_modules included, up to
+        # fs.inotify.max_user_watches, and refuses folders this user cannot read (a container's volume).
+        print(f"  !  cannot watch the files for changes: {exc}\n  !  polling for changes instead", flush=True)
+        yield from _poll(Path(directory), interval)
 
 
 def _poll(root: Path, interval: float) -> Iterator[str]:
     def snapshot() -> dict[Path, float]:
         times = {}
-        for path in root.rglob("*.py"):
-            if not _IGNORED_DIRS.intersection(path.relative_to(root).parts):
-                with contextlib.suppress(OSError):  # deleted a moment ago
-                    times[path] = path.stat().st_mtime
+        for folder, folders, files in os.walk(root):  # unreadable folders are skipped
+            folders[:] = [name for name in folders if name not in _IGNORED_DIRS]  # never walk into .venv
+            for name in files:
+                if os.path.normcase(name).endswith(".py"):
+                    path = Path(folder, name)
+                    with contextlib.suppress(OSError):  # deleted a moment ago
+                        times[path] = path.stat().st_mtime
         return times
 
     before = snapshot()

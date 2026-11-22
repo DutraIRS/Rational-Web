@@ -130,6 +130,9 @@ class TTLStore(Generic[V]):
         for key in list(self._items):
             self._evict(key)
 
+    def values(self) -> list[V]:
+        return [value for _, value in self._items.values()]
+
     def __len__(self) -> int:
         return len(self._items)
 

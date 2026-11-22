@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/DutraIRS/Rational-Web/main/docs/_static/logo.svg" alt="Rational Web logo: an owl" width="96" height="96">
+
 # Rational Web
 
 *Trying to make web development less irrational.*

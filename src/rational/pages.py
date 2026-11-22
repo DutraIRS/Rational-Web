@@ -9,7 +9,7 @@ import time
 import typing
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlencode
 
 from fastapi import Request, Response
@@ -23,7 +23,8 @@ from .document import render_document
 from .errors import RationalError, Redirect
 from .http import base_path, request_target
 from .protocol import EVENT_PATH, PROTOCOL_VERSION, STREAM_PATH, WS_PATH
-from .rendering.html import escape_text, to_html
+from .rendering.html import escape_attr, escape_text, to_html
+from .rendering.nodes import with_base
 from .runtime import PageRuntime
 from .styling.compiler import StyleSheet
 
@@ -125,6 +126,7 @@ class PageRoute:
             return await finish(error_page(app, request, 401, "Please sign in to view this page"))
 
         runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
+        runtime.base = base
         runtime.origin = (self.path, {k: str(v) for k, v in request.path_params.items()})
         runtime.requires_user = self.auth == "required"
         try:
@@ -236,7 +238,7 @@ class PageRoute:
             manifest=manifest,
             runtime_src=base + app.runtime_src,
             nonce=nonce,
-            favicon=app.favicon if page.favicon is None else page.favicon,
+            favicon=_icon(app.favicon if page.favicon is None else page.favicon, base),
             head_start=page.head_start,
             head_extra=seo + app.head_extra(nonce, base) + page.head_end,
             scripts=runtime.document_scripts(base),
@@ -253,6 +255,10 @@ def _etag_matches(if_none_match: str, etag: str) -> bool:
     return any(tag.strip() == "*" or tag.strip().removeprefix("W/") == opaque for tag in if_none_match.split(","))
 
 
+def _icon(favicon: str | Literal[False] | None, base: str) -> str | Literal[False] | None:
+    return with_base(favicon, base) if isinstance(favicon, str) else favicon
+
+
 def error_page(
     app: App, request: Request, status: int, message: str, headers: Mapping[str, str] | None = None
 ) -> HTMLResponse:
@@ -260,7 +266,7 @@ def error_page(
         '<main style="max-width:560px;margin:15vh auto;padding:0 16px">'
         f'<p style="color:var(--rw-color-muted);margin:0 0 8px">{status}</p>'
         f'<h1 style="margin:0 0 16px">{escape_text(message)}</h1>'
-        '<a href="/">Go to the home page</a></main>'
+        f'<a href="{escape_attr(base_path(request) + "/")}">Go to the home page</a></main>'
     )
     nonce = secrets.token_urlsafe(16) if app.csp else None
     html = render_document(
@@ -271,7 +277,7 @@ def error_page(
         page_css="",
         data_theme=app.data_theme(request),
         nonce=nonce,
-        favicon=app.favicon,
+        favicon=_icon(app.favicon, base_path(request)),
         head_extra=app.head_extra(nonce, base_path(request)),
     )
     response = HTMLResponse(html, status_code=status, headers=headers)

@@ -32,7 +32,7 @@ from .errors import RationalError
 from .http import base_path
 from .rendering.builder import h, normalize_children
 from .rendering.html import to_html
-from .rendering.nodes import AttrValue, Node, RawHTML, TextNode
+from .rendering.nodes import AttrValue, Node, RawHTML, TextNode, is_url_attribute, with_base
 from .state import call_watcher, check_page_state, restorable, values_equal
 from .styling.compiler import StyleSheet
 from .styling.style import merge
@@ -64,6 +64,7 @@ class PageRuntime:
         self.context = context
         self.sheet = sheet
         self.session = context.peek_session()
+        self.base = ""  # the root path its URLs live under (set by whoever serves the page)
         self.components: dict[str, Component] = {}
         self.paths: dict[str, str] = {}
         self.parent: dict[str, str | None] = {}
@@ -326,7 +327,12 @@ class PageRuntime:
 
     async def _resolve_node(self, node: Node, frame: Frame, counts: Counter[str], client: bool = False) -> Node:
         """``client``: the node belongs to a client component's own render, whose handlers run in the browser."""
-        attrs = [(n, v) for n, v in node.attrs if n != "class"]
+        base = self.base
+        attrs = [
+            (n, with_base(v, base) if base and isinstance(v, str) and is_url_attribute(n) else v)
+            for n, v in node.attrs
+            if n != "class"
+        ]
         classes = [str(node.attr("class"))] if node.attr("class") else []
         if node.style is not None and node.style:
             classes.append(self.sheet.use(node.style))

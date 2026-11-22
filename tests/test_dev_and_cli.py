@@ -1,7 +1,15 @@
 """Development mode (readable errors, live reload) and the command line."""
 
+import contextlib
+import json
+import os
+import signal
+import socket
+import subprocess
 import sys
 import threading
+import time
+import types
 from pathlib import Path
 
 import anyio
@@ -214,6 +222,19 @@ def test_describe_points_at_the_broken_syntax_file(tmp_path):
     assert info["line"] == 2
 
 
+def test_a_project_inside_the_python_installation_is_still_user_code():
+    import asyncio
+
+    from rational import dev
+
+    # A Linux distribution's Python lives in /usr, and so may a project (/usr/src/app): only the
+    # standard library and installed packages are left out of "your code".
+    assert dev._is_user_frame(os.path.join(sys.base_prefix, "src", "app", "app.py"))
+    assert not dev._is_user_frame(asyncio.__file__)
+    assert not dev._is_user_frame(pytest.__file__)
+    assert not dev._is_user_frame("/usr/lib/python3/dist-packages/starlette/routing.py")  # Debian's packages
+
+
 def test_cli_serves_broken_app_in_supervised_dev_mode(monkeypatch, capsys, tmp_path):
     import uvicorn
 
@@ -262,6 +283,172 @@ def test_a_file_deleted_while_watching_counts_as_a_change(tmp_path):
     deleter.start()
     assert next(watcher) == "gone.py"
     deleter.join()
+
+
+def test_watching_falls_back_to_polling_when_the_os_refuses(tmp_path, monkeypatch, capsys):
+    def refuse(*paths, **options):  # inotify on Linux: too many folders, or one this user cannot read
+        raise OSError("OS file watch limit reached.")
+        yield
+
+    monkeypatch.setitem(sys.modules, "watchfiles", types.SimpleNamespace(watch=refuse, PythonFilter=lambda: None))
+    (tmp_path / "app.py").write_text("x = 1")
+    changes = cli.watch(str(tmp_path), interval=0.05)
+    threading.Timer(0.3, lambda: (tmp_path / "app.py").write_text("x = 2  # changed")).start()
+    assert next(changes) == "app.py"
+    assert "polling for changes instead" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions; root reads everything")
+def test_the_poller_skips_folders_it_cannot_read(tmp_path):
+    locked = tmp_path / "pgdata"  # a container's data volume, say
+    locked.mkdir()
+    (tmp_path / "app.py").write_text("x = 1")
+    locked.chmod(0)
+    try:
+        changes = cli._poll(tmp_path, 0.05)
+        threading.Timer(0.2, lambda: (tmp_path / "app.py").write_text("x = 2  # changed")).start()
+        assert next(changes) == "app.py"
+    finally:
+        locked.chmod(0o700)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_the_supervisor_takes_sigterm_and_sighup_like_ctrl_c_but_leaves_nohup_alone():
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
+        received = []
+        with pytest.raises(KeyboardInterrupt), cli._interrupt_on_termination(received):
+            handlers = {signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)}
+            assert signal.SIG_DFL not in handlers and signal.SIG_IGN not in handlers  # or raising ends pytest
+            try:
+                signal.raise_signal(signal.SIGHUP)
+            finally:
+                signal.raise_signal(signal.SIGTERM)  # while the child stops: noted, not a second interrupt
+        assert received == [signal.SIGHUP, signal.SIGTERM]
+        assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)  # what nohup does
+        with cli._interrupt_on_termination([]):
+            assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_sigterm_to_the_dev_supervisor_stops_the_app_it_runs(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "from rational import App\n\napp = App()\n\nif __name__ == '__main__':\n    app.run()\n"
+    )
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = {name: value for name, value in os.environ.items() if not name.startswith("RATIONAL_") and name != "PORT"}
+    supervisor = subprocess.Popen(
+        [sys.executable, "app.py", "--dev", "--port", str(port)],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    def serving():
+        with socket.socket() as s:
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    try:
+        deadline = time.monotonic() + 30
+        while not serving():
+            assert supervisor.poll() is None and time.monotonic() < deadline, "the dev server did not start"
+            time.sleep(0.05)
+        supervisor.send_signal(signal.SIGTERM)  # to the supervisor alone, as kill, systemd or docker stop do
+        assert supervisor.wait(timeout=20) == -signal.SIGTERM
+        assert not serving()  # the app stopped with it, instead of serving on with nobody to restart it
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(supervisor.pid, signal.SIGKILL)  # whatever is left of its process group
+
+
+def test_the_stop_signal_reaches_the_app_and_then_the_server():
+    from rational.concurrency import on_stop_signal
+
+    heard, previous = [], signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, lambda signum, frame: heard.append("server"))  # the server's own handler
+    try:
+        undo = on_stop_signal(lambda: heard.append("app"))
+        signal.raise_signal(signal.SIGTERM)
+        assert heard == ["app", "server"]  # the app first, and the server still shuts down its way
+        undo()
+        signal.raise_signal(signal.SIGTERM)
+        assert heard == ["app", "server", "server"]
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_an_open_push_stream_does_not_hold_up_stopping(tmp_path):
+    # A live page's stream never ends by itself: stopping used to wait the whole graceful timeout (30 s), and
+    # longer than a docker stop or a systemd stop allows, so on_shutdown hooks never ran.
+    import httpx
+
+    (tmp_path / "app.py").write_text(
+        "import asyncio\n"
+        "from rational import App, Page, State, Text\n\n"
+        "app = App()\n\n\n"
+        "@app.on_shutdown\n"
+        "def bye():\n"
+        "    open('stopped.txt', 'w').close()\n\n\n"
+        "@app.page('/')\n"
+        "class Clock(Page):\n"
+        "    ticks = State(0)\n\n"
+        "    async def mount(self):\n"
+        "        self.run_task(self.tick)\n\n"
+        "    async def tick(self):\n"
+        "        while True:\n"
+        "            await asyncio.sleep(0.2)\n"
+        "            self.ticks += 1\n\n"
+        "    def render(self):\n"
+        "        return Text(f'ticks {self.ticks}')\n\n\n"
+        "if __name__ == '__main__':\n"
+        "    app.run()\n"
+    )
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = {name: value for name, value in os.environ.items() if not name.startswith("RATIONAL_") and name != "PORT"}
+    env["RATIONAL_SECRET_KEY"] = "k" * 43
+    server = subprocess.Popen(
+        [sys.executable, "app.py", "--prod", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        base = f"http://127.0.0.1:{port}"
+        with httpx.Client(base_url=base, timeout=10) as client:
+            for _ in range(300):
+                try:
+                    page = client.get("/", headers={"accept": "text/html"})
+                    break
+                except httpx.TransportError:
+                    time.sleep(0.05)
+            manifest = json.loads(page.text.split('id="rw-manifest">')[1].split("</script>")[0])
+            with client.stream("GET", f"{manifest['stream']}?page={manifest['page']}") as stream:
+                lines = stream.iter_lines()
+                assert next(lines).startswith("data:")  # the stream is open
+                started = time.monotonic()
+                server.send_signal(signal.SIGTERM)
+                assert server.wait(timeout=10) in (0, -signal.SIGTERM)  # newer uvicorn re-raises it when done
+                assert time.monotonic() - started < 5
+        assert (tmp_path / "stopped.txt").exists()  # and on_shutdown ran
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(server.pid, signal.SIGKILL)
 
 
 def test_the_servers_do_not_wait_for_ever_on_open_streams(monkeypatch):

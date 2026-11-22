@@ -50,7 +50,8 @@ class I18n:
     @classmethod
     def from_directory(cls, path: str | Path, default: str | None = None) -> I18n:
         """Load ``<dir>/<tag>.json`` files (flat ``{"key": "message"}`` objects)."""
-        catalogs = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(Path(path).glob("*.json"))}
+        files = sorted(p for p in Path(path).iterdir() if p.suffix.lower() == ".json")  # PT.JSON too, on any OS
+        catalogs = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in files}
         return cls(catalogs, default)
 
     @property

@@ -1,6 +1,7 @@
 """Security and robustness of the HTTP event protocol and page routing."""
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -393,6 +394,56 @@ def test_mounted_under_a_sub_path():
     page.click("Increment")
     assert "Count: 1" in page.text
     assert client.http.get("/app/api/ping/ping").json() == "pong"
+
+
+def test_the_apps_own_links_carry_the_sub_path():
+    from fastapi import FastAPI
+
+    from rational import Button, State, h
+
+    app = App(favicon="/static/icon.svg")
+
+    class Links(Component):
+        section = State("about")
+
+        def render(self):
+            return h(
+                "nav",
+                h("a", "Section", href=f"/{self.section}"),
+                h("a", "Already", href="/app/kept"),
+                h("a", "Other site", href="https://example.org/x"),
+                h("a", "Same host", href="//cdn.example.org/y"),
+                h("a", "Relative", href="next"),
+                h("a", "Top", href="#top"),
+                h("img", src="/static/logo.svg", alt=""),
+                Button("Change", on_click=self.change),
+            )
+
+        def change(self):
+            self.section = "contact"
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return Links()
+
+    outer = FastAPI()
+    outer.mount("/app", app)
+    page = TestClient(outer).open("/app/")
+    html = page.html
+    assert 'href="/app/about"' in html and 'src="/app/static/logo.svg"' in html
+    assert 'rel="icon" href="/app/static/icon.svg"' in html
+    for unchanged in (
+        'href="/app/kept"',
+        'href="https://example.org/x"',
+        'href="//cdn.example.org/y"',
+        'href="next"',
+        'href="#top"',
+    ):
+        assert unchanged in html
+    data = page.click("Change")
+    assert "/app/contact" in json.dumps(data["patches"]) and '"/contact"' not in json.dumps(data["patches"])
+    assert 'href="/"' not in TestClient(outer).http.get("/app/missing", headers={"accept": "text/html"}).text
 
 
 def test_routers_compose_pages_services_and_hooks():

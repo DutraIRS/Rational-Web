@@ -78,6 +78,39 @@ def test_base_path_prefixes_asset_links(tmp_path):
     assert 'href="/my-repo/_rational/theme.css' in (tmp_path / "index.html").read_text("utf-8")
 
 
+def test_a_site_under_a_sub_path_links_to_its_own_pages_and_files(tmp_path):
+    # A GitHub Pages project site lives at /<repo>/: root-relative links must point inside it.
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "logo.svg").write_text("<svg/>")
+    app = App()
+    app.static("/static", str(tmp_path / "assets"))
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            return h(
+                "main",
+                h("a", "About", href="/about"),
+                h("img", src="/static/logo.svg", alt=""),
+                h("a", "Out", href="https://example.org/"),
+            )
+
+    @app.page("/about")
+    class About(Page):
+        def render(self):
+            return h("a", "Home", href="/")
+
+    asyncio.run(export_site(app, tmp_path / "abs", base_path="/my-repo"))
+    home = (tmp_path / "abs" / "index.html").read_text("utf-8")
+    assert 'href="/my-repo/about"' in home and 'src="/my-repo/static/logo.svg"' in home
+    assert 'href="https://example.org/"' in home
+    assert 'href="/my-repo/"' in (tmp_path / "abs" / "about" / "index.html").read_text("utf-8")
+
+    asyncio.run(export_site(app, tmp_path / "rel", relative=True))
+    assert 'href="./about"' in (tmp_path / "rel" / "index.html").read_text("utf-8")
+    assert 'href="../"' in (tmp_path / "rel" / "about" / "index.html").read_text("utf-8")
+
+
 def test_export_does_not_leave_app_in_debug_mode(tmp_path):
     app = make_app()
     app.debug = True

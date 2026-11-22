@@ -562,6 +562,8 @@
     const n = s.replace(/[\x00-\x20\x7f]+/g, "").toLowerCase();  // eslint-disable-line no-control-regex
     if (n.startsWith("data:image/") && !n.startsWith("data:image/svg")) return s;
     if (/^(javascript|vbscript|data):/.test(n)) throw error("ValueError", `unsafe URL scheme in ${repr(s.slice(0, 40))}`);
+    const base = R._base;  // the app's root path: /about is served at /my-repo/about
+    if (base && s.startsWith("/") && !s.startsWith("//") && s !== base && !s.startsWith(base + "/")) return base + s;
     return s;
   }
   function callable(f) {

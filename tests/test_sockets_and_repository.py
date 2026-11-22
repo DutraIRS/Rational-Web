@@ -1,6 +1,9 @@
 """WebSocket classes with rooms, and the typed repository."""
 
 import asyncio
+import contextlib
+import os
+import sys
 from typing import Any
 
 import anyio
@@ -95,6 +98,36 @@ def test_rooms_reach_other_workers_through_the_bus():
         a.send_json({"text": "across"})
         assert a.receive_json() == {"said": "across"}
         assert b.receive_json() == {"said": "across"}  # delivered by the other worker
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="forked workers: POSIX only")
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")  # the child takes no lock
+def test_workers_forked_from_one_imported_app_reach_each_other():
+    # gunicorn --preload imports the app once and then forks the workers, so they all inherit its boot id.
+    class Recording(MemoryBus):
+        async def publish(self, channel: str, message: str) -> None:
+            self.sent = (channel, message)
+            await super().publish(channel, message)
+
+    bus = Recording()
+    app = chat_app(bus)
+    read, write = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # another worker publishes to the room (the memory bus never waits: no event loop needed)
+        with contextlib.suppress(StopIteration):
+            app.rooms.publish("lobby", {"said": "from the other worker"}).send(None)
+        os.write(write, "\n".join(bus.sent).encode())
+        os._exit(0)
+    os.close(write)
+    with os.fdopen(read) as pipe:
+        channel, message = pipe.read().split("\n")
+    os.waitpid(pid, 0)
+    with StarletteClient(app).websocket_connect("/ws/chat", headers=ORIGIN) as ws:
+        ws.receive_json()
+        ws.portal.call(bus.publish, channel, message)  # what the other worker sent arrives through the bus
+        ws.send_json({"text": "here"})
+        assert ws.receive_json() == {"said": "from the other worker"}
+        assert ws.receive_json() == {"said": "here"}
 
 
 def test_binary_frames_are_refused_without_ending_the_connection():

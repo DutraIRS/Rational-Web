@@ -115,7 +115,15 @@ def init(directory: str = "migrations") -> Path:
 
 
 def revision(db: Database, directory: str, message: str, autogenerate: bool = False) -> None:
-    command.revision(_config(db, directory), message=message, autogenerate=autogenerate)
+    config = _config(db, directory)
+    if autogenerate and not db.metadata.tables:
+        # Compared with no tables, a fresh database gives an empty revision, and a database the app
+        # has already filled (create_all) gives one that drops every table.
+        raise MigrationError(
+            "the database's metadata has no tables to compare with; import your models in the app and pass "
+            "their base's metadata: Database(url, metadata=Base.metadata)"
+        )
+    command.revision(config, message=message, autogenerate=autogenerate)
 
 
 def upgrade(db: Database, directory: str = "migrations", target: str = "head") -> None:

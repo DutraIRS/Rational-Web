@@ -61,6 +61,9 @@ def test_from_directory_and_validation(tmp_path):
     (tmp_path / "pt.json").write_text(json.dumps({"a": "Á"}), encoding="utf-8")
     assert I18n.from_directory(tmp_path, default="pt").translate("en", "a") == "A"
     assert I18n.from_directory(tmp_path, default="pt").default == "pt"
+    (tmp_path / "DE.JSON").write_text(json.dumps({"a": "Ä"}), encoding="utf-8")  # loaded on Windows, so everywhere
+    (tmp_path / "notes.txt").write_text("not a catalog", encoding="utf-8")
+    assert I18n.from_directory(tmp_path).locales == ["de", "en", "pt"]
     with pytest.raises(ValueError):
         I18n({})
     with pytest.raises(ValueError):

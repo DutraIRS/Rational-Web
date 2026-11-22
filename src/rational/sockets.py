@@ -206,11 +206,11 @@ class Rooms:
         text = _dumps(data)
         self._deliver(room, text)
         if self.app.bus is not None:
-            await self.app.bus.publish(self._channel(room), f"{self.app.boot_id} {text}")
+            await self.app.bus.publish(self._channel(room), f"{self.app._bus_origin} {text}")
 
     def _relay(self, room: str, message: str) -> None:
         origin, _, text = message.partition(" ")
-        if origin != self.app.boot_id:  # our own publishes were delivered already
+        if origin != self.app._bus_origin:  # our own publishes were delivered already
             self._deliver(room, text)
 
     def _deliver(self, room: str, text: str) -> None:

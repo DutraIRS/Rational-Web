@@ -48,10 +48,10 @@ async def export_site(
     """Write the static pages and assets of ``app`` under ``out``.
 
     ``base_path`` is the URL prefix the site will be served under (``"/my-repo"`` for a GitHub
-    Pages project site); it prefixes every asset link, exactly like ``--root-path`` does when serving.
-    ``relative=True`` links each page's assets relative to that page instead (``../_rational/...``),
-    so the site also works opened from disk or under any prefix; the 404 page, shown at any URL,
-    still uses ``base_path``. ``not_found=False`` writes no ``404.html``.
+    Pages project site); it prefixes every asset link and root-relative link (``/about``), exactly like
+    ``--root-path`` does when serving. ``relative=True`` makes them relative to each page instead
+    (``../_rational/...``, ``../about``), so the site also works opened from disk or under any prefix;
+    the 404 page, shown at any URL, still uses ``base_path``. ``not_found=False`` writes no ``404.html``.
     """
     root = Path(out)
     base = base_path.rstrip("/")

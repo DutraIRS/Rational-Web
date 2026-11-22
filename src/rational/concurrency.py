@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import signal
+import threading
 from collections.abc import Callable, Collection
 from typing import Any, Literal, TypeVar, overload
 
@@ -39,6 +41,45 @@ async def cancel_and_wait(tasks: Collection[asyncio.Task[Any]]) -> None:
         task.cancel()
     if tasks:
         await asyncio.wait(tasks)
+
+
+# What servers stop on: Ctrl+C, kill/systemd/docker stop, and Ctrl+Break in a Windows console.
+STOP_SIGNALS = tuple(getattr(signal, name) for name in ("SIGINT", "SIGTERM", "SIGBREAK") if hasattr(signal, name))
+
+
+def on_stop_signal(callback: Callable[[], object]) -> Callable[[], None]:
+    """Call ``callback()`` when the process is told to stop, then whatever handled the signal before (the
+    server's own handler, so it still shuts down as it would). Returns a function that undoes this.
+
+    Only the main thread can set signal handlers; elsewhere (a test client's thread) this does nothing.
+    Signals handled outside Python, or ignored, are left alone.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    previous: dict[int, Any] = {}
+
+    def handler(signum: int, frame: Any) -> None:
+        callback()
+        before = previous.get(signum)
+        if callable(before):
+            before(signum, frame)
+        elif before == signal.SIG_DFL:  # nobody handled it: end the way the signal ends a process
+            signal.signal(signum, signal.SIG_DFL)
+            signal.raise_signal(signum)
+
+    for signum in STOP_SIGNALS:
+        current = signal.getsignal(signum)
+        if current is None or current == signal.SIG_IGN:
+            continue
+        previous[signum] = current
+        signal.signal(signum, handler)
+
+    def undo() -> None:
+        for signum, before in previous.items():
+            if signal.getsignal(signum) is handler:  # unless someone has replaced ours since
+                signal.signal(signum, before)
+
+    return undo
 
 
 class HandlerTimeout(RationalError):  # noqa: N818 - public name mirrors NotFound, Forbidden

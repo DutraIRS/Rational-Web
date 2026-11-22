@@ -196,6 +196,8 @@ async def handle_stream(app: App, request: Request) -> Response:
         return _error(403, "session", "Session mismatch")
     if runtime.requires_user and (await app.context_for(request, session)).user is None:
         return _error(403, "session", "Please sign in to continue")
+    if app.stopping:  # the browser tries again a little later, and reaches the next process
+        return _error(503, "stopping", "The server is restarting")
     queue = runtime.subscribe()
     if queue is None:
         return _error(429, "too_many_streams", "Too many open streams for this page")
@@ -235,6 +237,9 @@ async def handle_websocket(app: App, websocket: WebSocket) -> None:
         return
     if runtime.requires_user and (await app.websocket_context(websocket, session)).user is None:
         await websocket.close(code=1008)
+        return
+    if app.stopping:
+        await websocket.close(code=1012)  # service restart: the browser reconnects later
         return
     queue = runtime.subscribe()
     if queue is None:

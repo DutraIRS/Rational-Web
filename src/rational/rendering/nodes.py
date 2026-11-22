@@ -108,6 +108,17 @@ def is_url_attribute(name: str) -> bool:
     return _is_url_attr(name)
 
 
+def with_base(url: str, base: str) -> str:
+    """``url`` under the app's root path (``base``, ``"/my-repo"``) if it is root-relative (``/about``).
+
+    Other URLs (absolute, ``//host``, relative, ``#top``) and ones that already start with ``base`` stay as
+    they are. ``base`` may also be a relative way back to the site root (``".."``) for exported pages.
+    """
+    if not base or not url.startswith("/") or url.startswith("//") or url == base or url.startswith(base + "/"):
+        return url
+    return base + url
+
+
 def check_url(value: str) -> None:
     normalized = _CONTROL_RE.sub("", value).lower()
     if normalized.startswith("data:image/") and not normalized.startswith("data:image/svg"):

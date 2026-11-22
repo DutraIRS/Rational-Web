@@ -63,13 +63,14 @@ class RedisBus:
     def __init__(self, client: Any = None, *, url: str | None = None) -> None:
         self._owns_client = client is None
         if client is None:
-            try:
-                from redis.asyncio import Redis
-            except ImportError as exc:  # pragma: no cover
-                raise ImportError("RedisBus needs the redis package: pip install 'rational[redis]'") from exc
+            from .stores import redis_from_url
+
             if url is None:
                 raise TypeError("RedisBus needs a client or a url")
-            client = Redis.from_url(url)
+            try:
+                client = redis_from_url(url)
+            except ImportError as exc:  # pragma: no cover
+                raise ImportError("RedisBus needs the redis package: pip install 'rational[redis]'") from exc
         self.client = client
         self._pubsub: Any = None
         self._callbacks: dict[str, list[Callback]] = {}
