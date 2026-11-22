@@ -10,6 +10,7 @@ exposes source code and tracebacks.
 from __future__ import annotations
 
 import linecache
+import logging
 import os
 import secrets
 import sysconfig
@@ -196,6 +197,22 @@ def _hint(exc: BaseException) -> str | None:
 
 DEV_SCRIPT_PATH = "/_rational/dev.js"
 BOOT_PATH = "/_rational/dev/boot"
+
+
+class _HideReloadChecks(logging.Filter):
+    """Drop the server's log line for each live-reload check: a page asks every second or so."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args  # uvicorn's access log: (client, method, path with query, HTTP version, status)
+        return not (isinstance(args, tuple) and len(args) > 2 and str(args[2]).partition("?")[0].endswith(BOOT_PATH))
+
+
+_hide_reload_checks = _HideReloadChecks()
+
+
+def hide_reload_checks() -> None:
+    """Keep live-reload checks out of the dev server's request log (calling it again changes nothing)."""
+    logging.getLogger("uvicorn.access").addFilter(_hide_reload_checks)
 
 
 _ERROR_CSS = (

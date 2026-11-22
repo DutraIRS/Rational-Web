@@ -50,6 +50,10 @@ when a proxy serves the app under a sub-path. Root-relative URLs in your pages (
 ``/``; absolute, protocol-relative, relative and fragment URLs, and ones that already start with the
 prefix, are left as they are. The same holds when the app is mounted inside another ASGI app.
 
+Linux servers tell capitals apart in file names, and Windows and macOS do not: there,
+``/static/Logo.svg`` serves ``logo.svg``, and the link breaks only once deployed. ``--dev`` logs a
+warning the first time a URL under ``app.static`` is spelled differently from its file.
+
 .. important::
 
    Page views (component state) live in process memory unless you enable resumable pages

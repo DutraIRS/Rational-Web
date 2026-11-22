@@ -372,6 +372,78 @@ def test_sigterm_to_the_dev_supervisor_stops_the_app_it_runs(tmp_path):
             os.killpg(supervisor.pid, signal.SIGKILL)  # whatever is left of its process group
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console signals")
+def test_the_windows_dev_supervisor_lets_the_app_shut_down_its_way(tmp_path):
+    # terminate() is TerminateProcess on Windows: the app died without its on_shutdown hooks, on every hot
+    # reload and on Ctrl+C. A Ctrl+Break to the supervisor alone also left the app serving.
+    source = (
+        "import pathlib\n"
+        "from rational import App\n\n"
+        "app = App()\n\n\n"
+        "@app.on_shutdown\n"
+        "def bye():\n"
+        "    with open('stopped.txt', 'a') as f:\n"
+        "        f.write('x')\n\n\n"
+        "if __name__ == '__main__':\n"
+        "    app.run()\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = {name: value for name, value in os.environ.items() if not name.startswith("RATIONAL_") and name != "PORT"}
+    supervisor = subprocess.Popen(
+        [sys.executable, "app.py", "--dev", "--port", str(port)],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+    stopped = tmp_path / "stopped.txt"
+
+    def serving():
+        with socket.socket() as s:
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    def wait_for(condition, what):
+        deadline = time.monotonic() + 30
+        while not condition():
+            assert supervisor.poll() is None and time.monotonic() < deadline, what
+            time.sleep(0.05)
+
+    try:
+        wait_for(serving, "the dev server did not start")
+        (tmp_path / "app.py").write_text(source + "# changed\n")
+        wait_for(stopped.exists, "the reload did not run on_shutdown")
+        wait_for(serving, "the dev server did not come back")
+        supervisor.send_signal(signal.CTRL_BREAK_EVENT)  # to the supervisor alone: the app has its own group
+        supervisor.wait(timeout=30)
+        assert stopped.read_text() == "xx"  # on the reload, and on the stop
+        assert not serving()
+    finally:
+        if supervisor.poll() is None:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(supervisor.pid)], capture_output=True)
+
+
+def test_live_reload_checks_stay_out_of_the_request_log():
+    import logging
+
+    from rational.dev import BOOT_PATH, hide_reload_checks
+
+    def logged(path):
+        record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                                   ("127.0.0.1:1", "GET", path, "1.1", 200), None)  # fmt: skip
+        return logging.getLogger("uvicorn.access").filter(record)
+
+    hide_reload_checks()
+    hide_reload_checks()  # once is enough, twice is harmless
+    assert not logged(BOOT_PATH) and not logged("/prefix" + BOOT_PATH + "?t=1")
+    assert logged("/") and logged("/_rational/stream?page=x")
+    record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, "no arguments", None, None)
+    assert logging.getLogger("uvicorn.access").filter(record)
+
+
 def test_the_stop_signal_reaches_the_app_and_then_the_server():
     from rational.concurrency import on_stop_signal
 

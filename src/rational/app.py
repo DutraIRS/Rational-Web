@@ -35,6 +35,7 @@ from .http import (
     BodyLimitMiddleware,
     ScopedCORS,
     SecurityHeadersMiddleware,
+    StaticDirectory,
     base_path,
     content_security_policy,
 )
@@ -405,9 +406,10 @@ class App:
         return fn
 
     def static(self, path: str, directory: str) -> None:
-        from fastapi.staticfiles import StaticFiles
-
-        self.fastapi.mount(path, StaticFiles(directory=directory), name=f"static:{path}")
+        """Serve the files in ``directory`` under ``path``. In ``--dev``, a URL whose capitals differ from
+        the file's name logs a warning: it works on Windows and macOS, and is a 404 on Linux servers."""
+        files = StaticDirectory(directory=directory, url=path, debug=lambda: self.debug)
+        self.fastapi.mount(path, files, name=f"static:{path}")
 
     def run(self, argv: list[str] | None = None, **overrides: Any) -> None:
         """Serve from the command line: ``python app.py --dev`` or ``python app.py --prod``.
