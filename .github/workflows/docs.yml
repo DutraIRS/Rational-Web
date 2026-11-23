@@ -6,8 +6,11 @@ name: Docs
 on:
   push:
     branches: [main]
-    # Again for a release: the merge is pushed before its tag, so that build shows a .dev version.
-    tags: ["v*"]
+  # Again after a release: the merge is pushed before its tag, so that first build shows a .dev version.
+  # This run counts as main, the only branch allowed to deploy to Pages, and main then has the tag.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
