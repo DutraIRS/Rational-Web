@@ -5,7 +5,9 @@ name: Docs
 
 on:
   push:
-    branches: [main]  # the version comes from the tag on the commit, pushed with it
+    branches: [main]
+    # Again for a release: the merge is pushed before its tag, so that build shows a .dev version.
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
