@@ -40,6 +40,9 @@ class Database:
         if serverless:
             # No pooled connections held between invocations; each use opens and closes its own.
             engine_options.setdefault("poolclass", NullPool)
+        if engine_options.get("poolclass") is not NullPool:
+            # A pooled connection the server closed (a restart) is replaced before use, not handed out.
+            engine_options.setdefault("pool_pre_ping", True)
         self.engine = create_async_engine(url, echo=echo, **engine_options)
         self.sessionmaker = async_sessionmaker(self.engine, expire_on_commit=False)
 

@@ -1484,7 +1484,7 @@ class _Function:
             return f"$rt.url({value.js})" if url else value.js
         if isinstance(value, str):
             js = string_js(value, frame)
-            return f"$rt.url({js})" if url and has_placeholder(value) else js
+            return f"$rt.url({js})" if url and (has_placeholder(value) or value.startswith("/")) else js  # root path
         if isinstance(value, (int, float)):
             return _number(value)
         raise self.error(node, f"attribute {name}= cannot hold {type(value).__name__} in client code")

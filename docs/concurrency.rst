@@ -87,9 +87,6 @@ the stream only when it has tasks. Details worth knowing:
   small and consistent. Request-scoped helpers such as ``self.context`` refer to the most recent
   event and may be stale; prefer services and ``self.app``.
 
-Loading states and deferred content
------------------------------------
-
 WebSocket push
 --------------
 
@@ -99,6 +96,9 @@ reconnects after a drop. Events still travel over ``POST``, so CSRF, rate limits
 are unchanged. The socket requires the page's own session cookie and a same-origin ``Origin`` header.
 Install the ``websockets`` extra (or ``wsproto``) so Uvicorn can serve it. SSE is the default because
 it works through more proxies.
+
+Loading states and deferred content
+-----------------------------------
 
 ``Suspense`` sends the page immediately with a fallback and pushes the real content when it is
 ready, so one slow query never delays the first paint:
@@ -131,6 +131,7 @@ re-renders and receives the patches over the stream, with no click needed. Notes
 
 * Only pages that read session data open a stream, so the cost is one connection per such tab.
 * The tab that made the change is not sent the same update twice.
-* It is off by default. Within one process this is immediate; with several workers a change only
-  reaches tabs held by the same worker (a shared pub/sub backend is future work).
+* It is off by default. Within one process this is immediate. With several workers, give the app a
+  bus (``RedisBus``) and a persistent session store so a change reaches tabs held by the other
+  workers too: see :doc:`running`.
 * Changes made from a plain thread (``@threaded`` handlers) reach other tabs on their next event.

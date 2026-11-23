@@ -10,9 +10,10 @@ exposes source code and tracebacks.
 from __future__ import annotations
 
 import linecache
+import logging
 import os
 import secrets
-import sys
+import sysconfig
 import traceback
 from importlib import resources
 from pathlib import Path
@@ -27,6 +28,10 @@ from .rendering.html import escape_attr, escape_text
 
 DEV_ENV = "RATIONAL_DEV"
 _PACKAGE_DIR = os.path.normcase(str(Path(__file__).parent))
+# The standard library, not all of sys.base_prefix: that is /usr for a Linux distribution's Python,
+# and projects live under it too (/usr/src/app). Packages are recognized by their folder's name.
+_STDLIB_DIRS = tuple({os.path.join(os.path.normcase(sysconfig.get_path(p)), "") for p in ("stdlib", "platstdlib")})
+_PACKAGE_FOLDERS = ("site-packages", "dist-packages")  # dist-packages: Debian and Ubuntu
 
 HINTS: list[tuple[str, str, str]] = [
     # (exception type name, substring of the message or "", hint)
@@ -172,7 +177,7 @@ def broken_app(exc: BaseException, stage: str) -> ASGIApp:
 
 def _is_user_frame(filename: str) -> bool:
     name = os.path.normcase(filename)
-    return not (name.startswith((_PACKAGE_DIR, os.path.normcase(sys.base_prefix), "<")) or "site-packages" in name)
+    return not (name.startswith((_PACKAGE_DIR, *_STDLIB_DIRS, "<")) or any(f in name for f in _PACKAGE_FOLDERS))
 
 
 def _relative(filename: str) -> str:
@@ -192,6 +197,22 @@ def _hint(exc: BaseException) -> str | None:
 
 DEV_SCRIPT_PATH = "/_rational/dev.js"
 BOOT_PATH = "/_rational/dev/boot"
+
+
+class _HideReloadChecks(logging.Filter):
+    """Drop the server's log line for each live-reload check: a page asks every second or so."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args  # uvicorn's access log: (client, method, path with query, HTTP version, status)
+        return not (isinstance(args, tuple) and len(args) > 2 and str(args[2]).partition("?")[0].endswith(BOOT_PATH))
+
+
+_hide_reload_checks = _HideReloadChecks()
+
+
+def hide_reload_checks() -> None:
+    """Keep live-reload checks out of the dev server's request log (calling it again changes nothing)."""
+    logging.getLogger("uvicorn.access").addFilter(_hide_reload_checks)
 
 
 _ERROR_CSS = (

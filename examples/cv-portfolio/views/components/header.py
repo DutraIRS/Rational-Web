@@ -1,4 +1,4 @@
-from rational import Button, Component, Container, Header, Link, Nav, Row, Spacer, Style, Text, js
+from rational import Button, Component, Container, Header, Link, Nav, Row, Spacer, Style, Text, h, js
 
 from content import PROFILE
 from views.styles import STICKY_HEADER, WIDTH
@@ -10,6 +10,21 @@ ANCHORS = [
     ("projects", "Projects"),
     ("contact", "Contact"),
 ]
+
+
+def theme_icon():
+    """A half-filled circle, drawn rather than typed: the "◐" character renders tiny or not at all in
+    the fonts many Linux desktops have. currentColor keeps it in the theme's text colour."""
+    return h(
+        "svg",
+        h("circle", cx="8", cy="8", r="6.5", fill="none", stroke="currentColor", stroke_width="1.5"),
+        h("path", d="M8 1.5a6.5 6.5 0 0 0 0 13z", fill="currentColor"),
+        viewBox="0 0 16 16",
+        width="16",
+        height="16",
+        aria_hidden="true",
+        focusable="false",
+    )
 
 
 class SiteHeader(Component):
@@ -28,7 +43,13 @@ class SiteHeader(Component):
                     Text(PROFILE.name, weight=800, tag="span"),
                     Spacer(),
                     links,
-                    Button("◐", variant="ghost", size="sm", aria_label="Toggle dark mode", on_click=js.toggle_theme()),
+                    Button(
+                        theme_icon(),
+                        variant="ghost",
+                        size="sm",
+                        aria_label="Toggle dark mode",
+                        on_click=js.toggle_theme(),
+                    ),
                     gap="md",
                 ),
                 max_width=WIDTH,

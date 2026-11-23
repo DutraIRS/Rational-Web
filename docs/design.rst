@@ -2,7 +2,8 @@ Design
 ======
 
 This page records how the v0.1 specification was matured into an implementation: the open
-questions it left, and the decisions taken.
+questions it left, and the decisions taken. Later releases built on these decisions; where one
+changed, the table says so.
 
 Principles
 ----------
@@ -13,8 +14,10 @@ Principles
 * Immutable style values and render nodes; state is explicitly mutable.
 * Secure by default; progressive enhancement; a small stable core with inspectable output.
 
-Non-goals for 0.x: a Python-to-JavaScript compiler, a React replacement, automatic
-distributed state, reimplementing SQLAlchemy, Bootstrap/Tailwind parity.
+Non-goals for 0.1: a Python-to-JavaScript compiler, a React replacement, automatic
+distributed state, reimplementing SQLAlchemy, Bootstrap/Tailwind parity. Two of them arrived later,
+as opt-ins: :doc:`client components <client-components>` compiled from Python, and Bootstrap and
+Tailwind adapters.
 
 Decisions
 ---------
@@ -55,8 +58,9 @@ Decisions
    * - Local operations
      - A closed ``js.*`` set (classes, attributes, focus, theme), never compiled Python.
    * - Sessions
-     - Opaque cookie id → server data; rotation on login/logout; in-memory stores behind
-       the ``SessionBackend`` protocol.
+     - Opaque cookie id → server data; rotation on login/logout; stores behind the
+       ``SessionBackend`` protocol: in memory by default, or Redis or SQL through
+       ``PersistentSessionStore``.
    * - Remote API
      - ``@remote`` → FastAPI route under ``/api`` with a generated body model, response
        model and OpenAPI entry; CSRF for cookie sessions; safe structured errors.

@@ -93,3 +93,25 @@ async def test_two_workers_share_sessions_through_sql(tmp_path):
     sid = sid_of(login)
     assert call(two, "whoami", sid=sid).json()["user"] == "ada"  # signed in on one, known on the other
     await db.dispose()
+
+
+def test_pooled_sql_connections_are_checked_before_use():
+    # After the database restarts, a pooled connection it closed must be replaced, not used (that answered 500).
+    assert Database("sqlite+aiosqlite:///:memory:").engine.pool._pre_ping is True
+    assert Database("sqlite+aiosqlite:///:memory:", pool_pre_ping=False).engine.pool._pre_ping is False
+    assert not getattr(Database("sqlite+aiosqlite:///:memory:", serverless=True).engine.pool, "_pre_ping", False)
+
+
+def test_redis_clients_from_a_url_check_connections_before_use():
+    # redis-py 7+ skips its check of a pooled connection while "maintenance notifications" are on (the default).
+    pytest.importorskip("redis")
+    from rational.bus import RedisBus
+    from rational.jobs import RedisJobStore
+
+    try:
+        from redis.maint_notifications import MaintNotificationsConfig  # noqa: F401
+    except ImportError:
+        pytest.skip("redis-py before 7 always checks")
+    url = "redis://127.0.0.1:1/0"  # never connected to here
+    for client in (RedisSessionDriver(url=url).client, RedisJobStore(url=url).client, RedisBus(url=url).client):
+        assert not client.connection_pool.maint_notifications_enabled()

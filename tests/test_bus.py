@@ -233,7 +233,7 @@ async def test_close_closes_only_a_client_the_bus_made_itself(monkeypatch):
             self.closed = True
 
     client = Client()
-    monkeypatch.setattr("redis.asyncio.Redis.from_url", lambda url: client)
+    monkeypatch.setattr("redis.asyncio.Redis.from_url", lambda url, **options: client)
     await RedisBus(url="redis://x").close()
     assert client.closed
 

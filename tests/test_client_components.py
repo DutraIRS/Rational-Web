@@ -6,8 +6,10 @@ compiler's errors.
 """
 
 import asyncio
+import importlib
 import json
 import re
+import sys
 
 import pytest
 
@@ -102,6 +104,42 @@ def test_compiling_is_deterministic():
     first, second = compiled(Counter), compiled(Counter)
     assert first.js == second.js and first.digest == second.digest
     assert 'rational.island("tests.test_client_components.Counter"' in first.js
+
+
+def test_windows_and_linux_line_endings_compile_alike(tmp_path, monkeypatch):
+    # A Windows checkout has CRLF line endings (.gitattributes: text=auto), a Linux one LF.
+    source = (
+        "from rational import Button, Column, State, Text\n"
+        "from rational.client import ClientComponent\n\n\n"
+        "class Note(ClientComponent):\n"
+        "    text = State('')\n\n"
+        "    def add(self):\n"
+        '        self.text += """two\n'
+        'lines"""\n\n'
+        "    def render(self):\n"
+        "        return Column(Text(self.text), Button('Add', on_click=self.add))\n"
+    )
+    js = []
+    for folder, newline in (("lf", "\n"), ("crlf", "\r\n")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "rw_line_endings.py").write_bytes(source.replace("\n", newline).encode())
+        monkeypatch.syspath_prepend(str(tmp_path / folder))
+        sys.modules.pop("rw_line_endings", None)
+        try:
+            js.append(App().client_module(importlib.import_module("rw_line_endings").Note).js)
+        finally:
+            sys.modules.pop("rw_line_endings", None)
+    assert js[0] == js[1] and '"two\\nlines"' in js[0]
+
+
+def test_root_relative_links_in_client_code_get_the_sub_path_in_the_browser():
+    class Nav(ClientComponent):
+        def render(self):
+            return Column(h("a", "About", href="/about"), h("a", "Out", href="https://example.org/"))
+
+    js = compiled(Nav).js
+    assert '$rt.url("/about")' in js  # islands.js puts the app's root path in front, as the server does
+    assert '"https://example.org/"' in js and '$rt.url("https://example.org/")' not in js
 
 
 def test_children_stay_on_the_server_in_a_slot():

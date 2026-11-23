@@ -45,7 +45,14 @@ One origin serves everything:
 Production mode disables debug output, binds to ``$HOST`` (default ``0.0.0.0``) and
 ``$PORT`` (default 8000), trusts ``X-Forwarded-*`` from ``$FORWARDED_ALLOW_IPS``
 (default ``127.0.0.1``) and hides the ``server`` header. Use ``--root-path /prefix``
-when a proxy serves the app under a sub-path.
+when a proxy serves the app under a sub-path. Root-relative URLs in your pages (``href="/about"``,
+``src="/static/logo.svg"``, the favicon) then get the prefix too, so write them as if the app were at
+``/``; absolute, protocol-relative, relative and fragment URLs, and ones that already start with the
+prefix, are left as they are. The same holds when the app is mounted inside another ASGI app.
+
+Spell file names in URLs exactly as on disk. Windows and macOS ignore capitals, so
+``/static/Logo.svg`` serves ``logo.svg`` while you develop, but a Linux server answers 404. ``--dev``
+logs a warning the first time a URL under ``app.static`` is spelled differently from its file.
 
 .. important::
 
@@ -56,10 +63,16 @@ when a proxy serves the app under a sub-path.
 Stopping
 --------
 
-When the server stops, open connections get 30 seconds to finish (1 in ``--dev``), since a live
-stream would otherwise hold a deploy up for ever: ``app.run(timeout_graceful_shutdown=60)`` changes
-that. Then the app unmounts the pages it holds, gives background work a few seconds, and runs your
-``on_shutdown`` hooks. Expired pages and sessions are let go of once a minute while the app runs.
+When the server is told to stop (Ctrl+C, ``kill``, ``systemctl stop``, ``docker stop``), the app ends
+its pages' live update streams at once and refuses new ones; browsers reconnect by themselves to the
+next process. Other open requests get 30 seconds to finish (1 in ``--dev``):
+``app.run(timeout_graceful_shutdown=60)`` changes that. Then the app unmounts the pages it holds, gives
+background work a few seconds, and runs your ``on_shutdown`` hooks. Expired pages and sessions are let
+go of once a minute while the app runs.
+
+The streams end from a handler for SIGINT and SIGTERM that the app adds in front of the server's own
+while it runs, in the main thread; the server then shuts down as it always does (checked with uvicorn
+and with gunicorn's uvicorn worker).
 
 Sessions across workers and restarts
 ------------------------------------
@@ -189,12 +202,13 @@ A site made of static pages does not need a running server. Export it as plain H
 and host them anywhere (GitHub Pages, Netlify, S3, a CDN)::
 
    $ python app.py --export site/
-   $ python app.py --export site/ --root-path /my-repo     # served under a sub-path
+   $ python app.py --export site/ --root-path /my-repo     # served under a sub-path (a GitHub Pages project)
 
 This writes ``site/index.html``, ``site/<path>/index.html``, ``site/_rational/theme.css``,
 a ``404.html`` and a copy of every directory mounted with ``app.static``. A route that ends in
 ``.html`` keeps that file name, so ``/docs/faq.html`` is written as ``site/docs/faq.html`` and an
-existing site keeps its URLs. Only pages that work without a server are exported: those with no
+existing site keeps its URLs. With ``--root-path``, root-relative links and ``app.static`` URLs get the
+prefix, as they do when serving. Only pages that work without a server are exported: those with no
 ``auth="required"`` and no interactivity (any page that loads the browser runtime, such as one
 with event handlers). Everything else is listed as skipped with the reason, and the command exits
 non-zero if nothing could be exported. The same export is available from code as
@@ -209,8 +223,8 @@ returning one), so one class can produce a whole documentation site::
 
 Options for sites that already exist and must keep looking exactly the same:
 
-* ``--relative`` (``relative=True``) links each page's assets relative to that page
-  (``../_rational/...``), so the site also works opened from disk or under any prefix.
+* ``--relative`` (``relative=True``) links each page's assets and root-relative links relative to that
+  page (``../_rational/...``, ``../about``), so the site also works under any prefix.
 * ``--no-404`` (``not_found=False``) writes no ``404.html``. A page registered at ``/404.html``
   replaces Rational's own.
 * ``App(theme=None)`` leaves out the theme stylesheet and its reset. ``Style`` values still
@@ -300,15 +314,33 @@ Behind a reverse proxy / CDN
    Terminate TLS at the proxy, forward ``X-Forwarded-Proto`` so cookies get ``Secure``,
    and cache ``/_rational/*.js|css`` aggressively (their URLs are content-hashed).
 
+   To talk to the proxy over a Unix socket, keep the socket in a folder only the app and the
+   proxy can enter: uvicorn always makes the socket itself world-writable (mode 0666), so the
+   folder's permissions are what keep other local users out. With systemd::
+
+      [Service]
+      User=myapp
+      Group=www-data
+      RuntimeDirectory=myapp
+      RuntimeDirectoryMode=0750
+      ExecStart=/srv/myapp/.venv/bin/uvicorn app:app --uds /run/myapp/app.sock --proxy-headers
+
+   and point the proxy at it (nginx: ``proxy_pass http://unix:/run/myapp/app.sock;``).
+
 Containers
    .. code-block:: dockerfile
 
       FROM python:3.13-slim
       WORKDIR /srv
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
       COPY . .
-      RUN pip install --no-cache-dir "rational[db]" .
       ENV RATIONAL_ENV=production
       CMD ["python", "app.py", "--prod"]
+
+   ``requirements.txt`` is the one ``rational new`` writes (add ``rational[db]`` and your database
+   driver if you use one). Copying it first lets Docker reuse the installed packages when only your
+   code changes.
 
 Content Security Policy
    ``App(csp=True)`` sends a strict policy with a per-response nonce. No inline

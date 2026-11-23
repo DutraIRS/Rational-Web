@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
 
+from .http import base_path
 from .runtime import PageRuntime
 from .state import StateMismatch, class_name
 from .stores import json_plain
@@ -141,6 +142,7 @@ class PageResumer:
         try:
             page = route.build(snap["params"])
             runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
+            runtime.base = base_path(request)
             runtime.id = page_id
             runtime.origin = (route.path, snap["params"])
             runtime.requires_user = route.auth == "required"

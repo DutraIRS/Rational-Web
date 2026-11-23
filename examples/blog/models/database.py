@@ -11,7 +11,7 @@ class Base(DeclarativeBase):
     pass
 
 
-database = Database(settings.DATABASE_URL)
+database = Database(settings.DATABASE_URL, metadata=Base.metadata)  # what migrations compare with
 
 
 async def create_tables() -> None:

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Rational Web</title>
+  <!-- The owl of Athena, a symbol of wisdom and reason. The chevrons on its chest are angle brackets. -->
+  <defs>
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="20.48" y1="20.48" x2="491.52" y2="491.52">
+      <stop offset="0" stop-color="#5ad991"/>
+      <stop offset="1" stop-color="#109868"/>
+    </linearGradient>
+    <linearGradient id="shine" gradientUnits="userSpaceOnUse" x1="20.48" y1="20.48" x2="20.48" y2="256">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="20.48" y="20.48" width="471.04" height="471.04" rx="112.64" fill="url(#tile)"/>
+  <rect x="20.48" y="20.48" width="471.04" height="471.04" rx="112.64" fill="url(#shine)"/>
+  <path d="M126 100 L256 162 L386 100 C416 158 424 214 424 264 C424 356 348 428 256 428 C164 428 88 356 88 264 C88 214 96 158 126 100 Z" fill="#ffffff" stroke="#ffffff" stroke-width="16" stroke-linejoin="round"/>
+  <circle cx="188" cy="244" r="64" fill="url(#tile)"/>
+  <circle cx="188" cy="244" r="40" fill="#ffffff"/>
+  <circle cx="188" cy="244" r="17" fill="#1a664d"/>
+  <circle cx="324" cy="244" r="64" fill="url(#tile)"/>
+  <circle cx="324" cy="244" r="40" fill="#ffffff"/>
+  <circle cx="324" cy="244" r="17" fill="#1a664d"/>
+  <path d="M240 300 L272 300 L256 332 Z" fill="url(#tile)" stroke="url(#tile)" stroke-width="10" stroke-linejoin="round"/>
+  <g fill="none" stroke="url(#tile)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="196,352 214,368 232,352"/>
+    <polyline points="280,352 298,368 316,352"/>
+    <polyline points="238,382 256,398 274,382"/>
+  </g>
+</svg>

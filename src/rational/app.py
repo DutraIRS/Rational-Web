@@ -24,7 +24,7 @@ from .apidocs import swagger_html
 from .assets import Adapter, Asset, as_asset, render_assets
 from .bots import Limiter
 from .component import Page
-from .concurrency import SyncHandlers, cancel_and_wait
+from .concurrency import SyncHandlers, cancel_and_wait, on_stop_signal
 from .context import Context
 from .dev import BOOT_PATH, DEV_SCRIPT_PATH, is_dev_environment
 from .dev import error_page as dev_error_page
@@ -35,6 +35,7 @@ from .http import (
     BodyLimitMiddleware,
     ScopedCORS,
     SecurityHeadersMiddleware,
+    StaticDirectory,
     base_path,
     content_security_policy,
 )
@@ -163,6 +164,7 @@ class App:
         self.api_prefix = "/" + api_prefix.strip("/")
         self.favicon = favicon
         self.boot_id = secrets.token_hex(8)
+        self.stopping = False  # set when the server is told to stop (see end_streams)
         self.secure_cookies = secure_cookies
         self.csp = csp
         self.session_ttl = session_ttl
@@ -404,9 +406,10 @@ class App:
         return fn
 
     def static(self, path: str, directory: str) -> None:
-        from fastapi.staticfiles import StaticFiles
-
-        self.fastapi.mount(path, StaticFiles(directory=directory), name=f"static:{path}")
+        """Serve the files in ``directory`` under ``path``. In ``--dev``, a URL whose capitals differ from
+        the file's name logs a warning: it works on Windows and macOS, and is a 404 on Linux servers."""
+        files = StaticDirectory(directory=directory, url=path, debug=lambda: self.debug)
+        self.fastapi.mount(path, files, name=f"static:{path}")
 
     def run(self, argv: list[str] | None = None, **overrides: Any) -> None:
         """Serve from the command line: ``python app.py --dev`` or ``python app.py --prod``.
@@ -674,11 +677,17 @@ class App:
 
     # -- cross-worker live sessions ------------------------------------------------------------
 
+    @property
+    def _bus_origin(self) -> str:
+        """This process on the bus. Not the boot id alone: workers forked from a process that already
+        imported the app (``gunicorn --preload``) share it, and would take each other's news for their own."""
+        return f"{self.boot_id}.{os.getpid()}"
+
     async def _announce_session(self, session: Session) -> None:
         """``PersistentSessionStore.on_saved``: tell the other workers that ``session`` changed."""
         assert self.bus is not None
         try:
-            await self.bus.publish(SESSION_CHANNEL, f"{self.boot_id} {session.id}")
+            await self.bus.publish(SESSION_CHANNEL, f"{self._bus_origin} {session.id}")
         except Exception:
             log.exception("could not announce a session change")
 
@@ -698,7 +707,7 @@ class App:
 
     def _on_session_changed(self, message: str) -> None:
         origin, _, sid = message.partition(" ")
-        session = self.sessions.get(sid) if origin != self.boot_id else None
+        session = self.sessions.get(sid) if origin != self._bus_origin else None
         if session is not None and session.listeners:
             self._spawn(self.sessions.load(sid))  # merges the newer record and wakes the pages
 
@@ -729,10 +738,16 @@ class App:
                 raise
             traceback.print_exception(type(exc), exc, exc.__traceback__)
             self._startup_error = exc
-        sweeper = asyncio.get_running_loop().create_task(self._sweep_forever())
+        loop = asyncio.get_running_loop()
+        self.stopping = False
+        # Open push streams never finish by themselves: end them as soon as the server is told to stop,
+        # or it waits for them until its graceful timeout (30 seconds) and only then runs on_shutdown.
+        undo_stop_signal = on_stop_signal(lambda: loop.call_soon_threadsafe(self.end_streams))
+        sweeper = loop.create_task(self._sweep_forever())
         try:
             yield
         finally:
+            undo_stop_signal()
             await cancel_and_wait([sweeper])
             self.pages.clear()  # unmount() runs, open streams end
             await self._finish_tasks()
@@ -750,6 +765,13 @@ class App:
                     log.exception("could not close the bus")
             if self.db is not None:
                 await self.db.dispose()
+
+    def end_streams(self) -> None:
+        """End every open push stream and refuse new ones: the server is stopping. Browsers reconnect by
+        themselves, to the next process."""
+        self.stopping = True
+        for runtime in self.pages.values():
+            runtime.publish(None)
 
     async def _sweep_forever(self) -> None:
         while True:

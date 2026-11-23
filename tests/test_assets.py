@@ -1,6 +1,9 @@
+import os
+
 import pytest
 
 from rational import App, Asset, Page, Text, bootstrap, cx, tailwind
+from rational.http import actual_spelling
 from rational.testing import TestClient
 
 
@@ -67,3 +70,28 @@ def test_validation():
 def test_cx():
     assert cx("a", None, False, ["b", {"c": 1, "d": 0}], {"e": True}) == "a b c e"
     assert cx() == ""
+
+
+def test_a_url_spelled_differently_from_its_file_is_reported_in_debug_mode(tmp_path, caplog):
+    (tmp_path / "Images").mkdir()
+    (tmp_path / "Images" / "logo.svg").write_text("<svg/>")
+    assert actual_spelling(str(tmp_path), os.path.join("images", "LOGO.svg")) == os.path.join("Images", "logo.svg")
+    assert actual_spelling(str(tmp_path), os.path.join("Images", "logo.svg")) == os.path.join("Images", "logo.svg")
+    assert actual_spelling(str(tmp_path), os.path.join("Images", "missing.svg")) == os.path.join(
+        "Images", "missing.svg"
+    )
+
+    case_blind = (tmp_path / "IMAGES" / "LOGO.SVG").exists()  # Windows and macOS, by default
+    for debug, expected in ((False, 0), (True, 1)):
+        caplog.clear()
+        app = App(debug=debug)
+        app.static("/static", str(tmp_path))
+        client = TestClient(app).http
+        for _ in range(2):  # reported once
+            reply = client.get("/static/images/LOGO.svg")
+        assert reply.status_code == (200 if case_blind else 404)
+        assert client.get("/static/Images/logo.svg").status_code == 200
+        warned = [r for r in caplog.records if "tell capitals apart" in r.getMessage()]
+        assert len(warned) == (expected if case_blind else 0)
+        if warned:
+            assert "/static/Images/logo.svg" in warned[0].getMessage()

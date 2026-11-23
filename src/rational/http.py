@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import logging
+import os
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -10,12 +12,15 @@ from fastapi import Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .security import same_text
 
 if TYPE_CHECKING:
     from .session import Session
+
+log = logging.getLogger("rational")
 
 SESSION_COOKIE = "rw_sid"
 THEME_COOKIE = "rw_theme"
@@ -204,3 +209,43 @@ class BodyLimitMiddleware:
             return message
 
         await self.app(scope, limited, send)
+
+
+class StaticDirectory(StaticFiles):
+    """``app.static``: a directory of files. In debug mode it warns when a URL's capitals differ from the
+    file's: Windows and macOS serve ``/static/Logo.svg`` from ``logo.svg``, Linux servers answer 404."""
+
+    def __init__(self, *, directory: str, url: str, debug: Callable[[], bool]) -> None:
+        super().__init__(directory=directory)
+        self.url = url.rstrip("/")
+        self.debug = debug
+        self._warned: set[str] = set()
+
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        full_path, stat = super().lookup_path(path)
+        if stat is not None and self.debug() and path not in self._warned:
+            spelled = actual_spelling(str(self.directory), path)
+            if spelled != path:
+                self._warned.add(path)
+                log.warning(
+                    "%s/%s is served from %s here, but servers that tell capitals apart (Linux) answer 404: "
+                    "write it as %s/%s",
+                    self.url,
+                    path.replace(os.sep, "/"),
+                    spelled,
+                    self.url,
+                    spelled.replace(os.sep, "/"),
+                )
+        return full_path, stat
+
+
+def actual_spelling(directory: str, path: str) -> str:
+    """``path`` (relative to ``directory``) with each part spelled as it is on disk."""
+    parts: list[str] = []
+    for part in path.split(os.sep):
+        try:
+            names = os.listdir(os.path.join(directory, *parts))
+        except OSError:  # gone, or not a directory: keep the rest as written
+            names = []
+        parts.append(next((name for name in names if name.casefold() == part.casefold() and part not in names), part))
+    return os.sep.join(parts)

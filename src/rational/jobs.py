@@ -137,11 +137,12 @@ class RedisJobStore:
         if client is None:
             if url is None:
                 raise ValueError("pass a redis client or url=")
+            from .stores import redis_from_url
+
             try:
-                from redis.asyncio import Redis
+                client = redis_from_url(url)
             except ImportError as e:
                 raise ImportError("RedisJobStore needs the 'redis' package: pip install redis") from e
-            client = Redis.from_url(url)
         self.client = client
         self.keys = (f"{prefix}:queued", f"{prefix}:leased")
         self.prefix = prefix

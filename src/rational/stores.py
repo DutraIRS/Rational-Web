@@ -124,6 +124,23 @@ class MemorySessionDriver:
         return len(self._items)
 
 
+def redis_from_url(url: str) -> Any:
+    """A ``redis.asyncio`` client whose pool checks each connection before lending it out.
+
+    A connection the server closed (it restarted) is then replaced before use instead of failing the
+    next command. redis-py 7+ skips that check while its "maintenance notifications" (a Redis Enterprise
+    feature) are on, as they are by default ("auto"), so they are turned off here. Raises ImportError
+    without the ``redis`` package.
+    """
+    from redis.asyncio import Redis
+
+    try:
+        from redis.maint_notifications import MaintNotificationsConfig
+    except ImportError:  # redis-py before 7 always checks
+        return Redis.from_url(url)
+    return Redis.from_url(url, maint_notifications_config=MaintNotificationsConfig(enabled=False))
+
+
 class RedisSessionDriver:
     """Redis through ``redis.asyncio`` (``pip install redis``).
 
@@ -136,10 +153,9 @@ class RedisSessionDriver:
             if url is None:
                 raise ValueError("pass a redis client or url=")
             try:
-                from redis.asyncio import Redis
+                client = redis_from_url(url)
             except ImportError as e:
                 raise ImportError("RedisSessionDriver needs the 'redis' package: pip install redis") from e
-            client = Redis.from_url(url)
         self.client = client
 
     async def get(self, key: str) -> bytes | None:

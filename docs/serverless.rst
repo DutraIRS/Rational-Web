@@ -8,7 +8,7 @@ What works, what does not
 -------------------------
 
 * **Static pages plus services**: works anywhere. Export the pages (``python app.py --export site/``)
-  and host the ``@remote`` services as an ``api_only`` app with ``cors_origins=`` (see :doc:`services`).
+  and host the ``@remote`` services as an ``api_only`` app with ``cors_origins=`` (see :doc:`running`).
 * **Interactive pages**: each event is a separate request, so they work on request-scoped platforms
   only with ``page_snapshots=`` and a shared session store (:doc:`running`). Every event then pays a
   store read and write.

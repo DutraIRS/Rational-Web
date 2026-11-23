@@ -27,14 +27,16 @@ import contextlib
 import importlib
 import importlib.util
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .dev import DEV_ENV
+from .dev import DEV_ENV, hide_reload_checks
 
 if TYPE_CHECKING:
     from .app import App
@@ -42,6 +44,12 @@ if TYPE_CHECKING:
 Target = tuple[str, str, str]  # (module, attribute, directory) to re-import the app in a child process
 
 SUPERVISED_ENV = "RATIONAL_SUPERVISED"
+STOP_SECONDS = 10  # how long the app may take to shut down (its hooks, its tasks) on a restart or a stop
+# Signals that end the dev supervisor at once unless it handles them, leaving the app running.
+if sys.platform == "win32":
+    _SUPERVISOR_STOP_SIGNALS = (signal.SIGBREAK,)
+else:
+    _SUPERVISOR_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
 # Seconds open connections get when the server stops: a live stream would otherwise hold it up forever.
 GRACEFUL_SECONDS = {"dev": 1, "prod": 30}
 
@@ -150,6 +158,7 @@ def _serve_dev(
     if reload and target is not None:
         supervise(target, args, host, options["port"])
     else:
+        hide_reload_checks()
         uvicorn.run(app, **options, **overrides)
 
 
@@ -278,6 +287,7 @@ def _serve_broken(argv: Sequence[str], args: argparse.Namespace) -> None:
     if os.environ.get(SUPERVISED_ENV) or args.no_reload:
         from . import dev
 
+        hide_reload_checks()
         uvicorn.run(dev.broken_app(exc, "while importing the app"), host=host, port=port, log_level="info")
         return
     # Reload without a supervised child only works for a file target we can watch.
@@ -289,6 +299,7 @@ def _serve_broken(argv: Sequence[str], args: argparse.Namespace) -> None:
     if supervise_target is None:
         from . import dev
 
+        hide_reload_checks()
         uvicorn.run(dev.broken_app(exc, "while importing the app"), host=host, port=port, log_level="info")
         return
     supervise(supervise_target, args, host, port)
@@ -319,7 +330,12 @@ def load_target(spec: str, app_dir: str | None = None) -> tuple[App, Target]:
 
 
 def supervise(target: Target, args: argparse.Namespace, host: str, port: int) -> None:
-    """Run the app in a child process and restart it whenever a Python file changes."""
+    """Run the app in a child process and restart it whenever a Python file changes.
+
+    Ctrl+C stops the child too. So do SIGTERM and SIGHUP (on Windows, Ctrl+Break) sent to the supervisor
+    alone (``kill``, systemd, ``docker stop``), which would otherwise leave the child serving on the port.
+    Restarts and stops let the child shut down its way, so its ``on_shutdown`` hooks run.
+    """
     module, attr, directory = target
     spec = f"{module}:{attr}" if attr else module
     command = [sys.executable, "-m", "rational", spec, "--app-dir", directory, "--dev", "--no-reload",
@@ -327,16 +343,48 @@ def supervise(target: Target, args: argparse.Namespace, host: str, port: int) ->
     if args.log_level:
         command += ["--log-level", args.log_level]
     env = {**os.environ, DEV_ENV: "1", SUPERVISED_ENV: "1"}
-    child = subprocess.Popen(command, env=env)
-    try:
-        for changed in watch(directory):
-            print(f"  ->  {changed} changed, restarting", flush=True)
+    received: list[int] = []
+    with _interrupt_on_termination(received):
+        child = _start(command, env)
+        try:
+            for changed in watch(directory):
+                print(f"  ->  {changed} changed, restarting", flush=True)
+                _stop(child)
+                child = _start(command, env)
+        except KeyboardInterrupt:
+            pass
+        finally:
             _stop(child)
-            child = subprocess.Popen(command, env=env)
-    except KeyboardInterrupt:
-        pass
+    for signum in received[:1]:
+        signal.raise_signal(signum)  # the child is gone: now end the way that signal ends a process
+
+
+@contextlib.contextmanager
+def _interrupt_on_termination(received: list[int]) -> Iterator[None]:
+    """Turn SIGTERM and SIGHUP (on Windows, SIGBREAK) into the KeyboardInterrupt that Ctrl+C raises, once.
+
+    Their default action ends the process at once, without the ``finally`` that stops the child.
+    Only signals left at that default are taken (``nohup`` ignores SIGHUP, and so do we). They are
+    appended to ``received``, and the previous handlers are back on exit.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def interrupt(signum: int, frame: object) -> None:
+        received.append(signum)
+        if len(received) == 1:  # a second signal must not cut the child's shutdown short
+            raise KeyboardInterrupt
+
+    previous = {}
+    for signum in _SUPERVISOR_STOP_SIGNALS:
+        if signal.getsignal(signum) is signal.SIG_DFL:
+            previous[signum] = signal.signal(signum, interrupt)
+    try:
+        yield
     finally:
-        _stop(child)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def watch(directory: str, interval: float = 0.4) -> Iterator[str]:
@@ -346,17 +394,26 @@ def watch(directory: str, interval: float = 0.4) -> Iterator[str]:
     except ImportError:
         yield from _poll(Path(directory), interval)
         return
-    for changes in watchfiles.watch(directory, watch_filter=watchfiles.PythonFilter()):
-        yield _relative(sorted(path for _, path in changes)[0], directory)
+    try:
+        for changes in watchfiles.watch(directory, watch_filter=watchfiles.PythonFilter()):
+            yield _relative(sorted(path for _, path in changes)[0], directory)
+    except OSError as exc:
+        # Linux's inotify needs a watch for every folder, .venv and node_modules included, up to
+        # fs.inotify.max_user_watches, and refuses folders this user cannot read (a container's volume).
+        print(f"  !  cannot watch the files for changes: {exc}\n  !  polling for changes instead", flush=True)
+        yield from _poll(Path(directory), interval)
 
 
 def _poll(root: Path, interval: float) -> Iterator[str]:
     def snapshot() -> dict[Path, float]:
         times = {}
-        for path in root.rglob("*.py"):
-            if not _IGNORED_DIRS.intersection(path.relative_to(root).parts):
-                with contextlib.suppress(OSError):  # deleted a moment ago
-                    times[path] = path.stat().st_mtime
+        for folder, folders, files in os.walk(root):  # unreadable folders are skipped
+            folders[:] = [name for name in folders if name not in _IGNORED_DIRS]  # never walk into .venv
+            for name in files:
+                if os.path.normcase(name).endswith(".py"):
+                    path = Path(folder, name)
+                    with contextlib.suppress(OSError):  # deleted a moment ago
+                        times[path] = path.stat().st_mtime
         return times
 
     before = snapshot()
@@ -369,11 +426,27 @@ def _poll(root: Path, interval: float) -> Iterator[str]:
             yield _relative(str(changed[0]), str(root))
 
 
+def _start(command: list[str], env: dict[str, str]) -> subprocess.Popen[bytes]:
+    # On Windows, a process group of its own, so that it can be sent Ctrl+Break alone (see _stop). The
+    # console's Ctrl+C then reaches only the supervisor, which stops it the same way.
+    if sys.platform == "win32":
+        return subprocess.Popen(command, env=env, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    return subprocess.Popen(command, env=env)
+
+
 def _stop(process: subprocess.Popen[bytes]) -> None:
+    """Ask the app to stop, as Ctrl+C does, so that it shuts down its way; kill it if it takes too long.
+
+    On Windows, ``terminate()`` ends a process at once, without its ``on_shutdown`` hooks: Ctrl+Break is
+    the signal it handles.
+    """
     if process.poll() is None:
-        process.terminate()
+        if sys.platform == "win32":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            process.terminate()  # SIGTERM
         try:
-            process.wait(timeout=5)
+            process.wait(timeout=STOP_SECONDS)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()

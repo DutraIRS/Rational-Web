@@ -101,13 +101,21 @@ to it with SQLAlchemy, and Rational Web wraps the async parts:
 .. code-block:: python
 
    # models/database.py — one engine for the whole app
-   from rational.backend import Database
+   from rational.backend import Database, Model
 
-   database = Database("sqlite+aiosqlite:///app.db")
+   database = Database("sqlite+aiosqlite:///app.db", metadata=Model.metadata)
 
 
    # models/entry.py — a table is a class; a row is an instance
-   class Entry(database.Base):
+   from sqlalchemy import String
+   from sqlalchemy.orm import Mapped, mapped_column
+
+   from rational.backend import Model
+
+
+   class Entry(Model):
+       __tablename__ = "entries"
+
        id: Mapped[int] = mapped_column(primary_key=True)
        text: Mapped[str] = mapped_column(String(280))
 
@@ -143,7 +151,7 @@ composed with ``|``:
 
 .. code-block:: python
 
-   from rational import Style
+   from rational import Card, Style
 
    CARD = Style(padding="md", shadow="lg") | Style(border_left="4px solid var(--rw-color-primary)")
 

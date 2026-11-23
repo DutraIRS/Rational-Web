@@ -72,6 +72,8 @@ Themes
 ``professional`` — or a :class:`~rational.Theme`. ``theme_mode`` is ``"system"``
 (follows the OS), ``"light"`` or ``"dark"``. Customize a preset::
 
+   from rational.styling.theme import MODERN   # also MINIMAL, SOFT, PROFESSIONAL
+
    brand = MODERN.with_colors(light={"primary": "#ff0066"}, dark={"primary": "#ff5c9a"})
    app = App(theme=brand)
 
@@ -86,7 +88,7 @@ Typed ``Style`` stays the default, but you can bring a CSS framework or your own
 
 .. code-block:: python
 
-    from rational import App, bootstrap, tailwind, cx, Asset
+    from rational import App, Asset, bootstrap, cx, h, tailwind
 
     App(adapter=bootstrap(js=True))                       # pinned jsDelivr build with integrity hashes
     App(adapter=tailwind(css="/static/tailwind.css"))     # CSS built by the Tailwind CLI
