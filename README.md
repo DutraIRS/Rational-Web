@@ -255,6 +255,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [ ] Health checks and Prometheus metrics
 - [ ] Content collections: Markdown with front matter as pages
 - [ ] Notifications: in-app, email and web push
+- [ ] Translatable framework messages (validation summary, expired page, 404, rate limits)
 - [ ] Progressive web apps (manifest, offline service worker), then desktop builds and mobile shells
 
 **1.0: stability**

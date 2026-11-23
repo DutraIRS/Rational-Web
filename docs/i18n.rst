@@ -30,3 +30,9 @@ matching ``pt``), then the first catalog (or ``default=``). ``<html lang>`` foll
 
 Number and date formatting is left to ``babel`` or the standard library; ``ctx.locale`` is the tag to
 pass them.
+
+Rational's own messages are in English for now: the validation summary ("Please correct the
+highlighted fields"), "This page expired", the 404 and sign-in pages, rate-limit and CAPTCHA messages.
+Pydantic's field errors are English too; raise ``FieldError`` with your own text where it matters.
+The emails sent by :class:`~rational.accounts.Accounts` can be translated by overriding their
+``*_message`` methods.

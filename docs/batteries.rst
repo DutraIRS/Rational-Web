@@ -9,6 +9,7 @@ Signing people in
 
 Passwords are hashed with scrypt and a random salt; store the hash, never the password::
 
+    from rational import FieldError
     from rational.security import ahash_password, averify_password
 
     user.password = await ahash_password(form.password)
@@ -27,6 +28,8 @@ so the time a failed sign-in takes does not tell who has an account.
 ``HttpOnly``, and every event and API call is CSRF-checked. ``auth="required"`` on a page or a
 ``@remote`` method refuses anonymous visitors. To load the user object once per request, install an
 authenticator::
+
+    from rational.backend import Repository
 
     @app.authenticate
     async def current_user(ctx):
@@ -223,6 +226,8 @@ Data
 (``async with self.db.transaction() as s: ...``), or :class:`~rational.backend.database.Repository`
 for the everyday operations::
 
+    from rational.backend import Repository
+
     notes = Repository(self.db, Note)
     note = await notes.add(title="Hi", owner_id=self.user.id)
     page = await notes.page(Note.owner_id == self.user.id, page=2, size=20, order_by=Note.id.desc())
@@ -231,7 +236,7 @@ for the everyday operations::
     await notes.delete(note.id)
 
 Migrations: ``rational db init``, ``rational db revision app.py -m "add notes" --autogenerate``,
-``rational db upgrade app.py`` (see :doc:`running`).
+``rational db upgrade app.py`` (see :doc:`services`).
 
 Sessions
 --------
@@ -286,6 +291,7 @@ workers, share them: ``app.limiter = Limiter(RedisSessionDriver(url=...))``.
 **Form checks.** Put :class:`~rational.bots.HumanCheck` in a form and ``@human`` on its submit
 handler::
 
+    from rational import Button, Component, Form, Input
     from rational.bots import HumanCheck, human, limit
 
     class Signup(Component):

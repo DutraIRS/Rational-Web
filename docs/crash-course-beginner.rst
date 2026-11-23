@@ -151,7 +151,7 @@ composed with ``|``:
 
 .. code-block:: python
 
-   from rational import Style
+   from rational import Card, Style
 
    CARD = Style(padding="md", shadow="lg") | Style(border_left="4px solid var(--rw-color-primary)")
 

@@ -9,6 +9,11 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - The docs have a logo: the owl of Athena, in the sidebar and as the favicon, with link and highlight
   colours to match; the README shows it too.
+- `from rational.backend import Repository`, as the docs use it (it was only in
+  `rational.backend.database`).
+- Windows and macOS: `--dev` logs a warning the first time a URL under `app.static` is spelled with
+  other capitals than its file (`/static/Logo.svg` for `logo.svg`). It works there, and is a 404 once
+  deployed on Linux.
 
 ### Changed
 - On every OS, `rational db revision --autogenerate` now refuses an app whose database metadata has no
@@ -33,6 +38,10 @@ All notable changes to this project are documented here. The format follows
   stop timeouts killed the app before its `on_shutdown` hooks ran. It now takes well under a second.
 - Linux: `kill`, systemd and `docker stop` stop the `--dev` app too. SIGTERM and SIGHUP sent to the
   reload supervisor used to leave its child serving on the port.
+- Windows: a `--dev` restart lets the app shut down its way, so its `on_shutdown` hooks run; it was
+  ended at once. Ctrl+Break sent to the reload supervisor stops the app too. On every OS the app gets
+  10 seconds to stop before it is killed (it was 5).
+- `--dev` no longer fills the request log with the live-reload check each open page makes every second.
 - Linux: hot reload falls back to polling when inotify refuses (`fs.inotify.max_user_watches`, a folder
   this user cannot read), and the poller never walks into `.venv`.
 - Linux: dev error pages point at your line for an app under `/usr` (`/usr/src/app`), and Debian's

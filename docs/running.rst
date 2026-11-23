@@ -50,9 +50,9 @@ when a proxy serves the app under a sub-path. Root-relative URLs in your pages (
 ``/``; absolute, protocol-relative, relative and fragment URLs, and ones that already start with the
 prefix, are left as they are. The same holds when the app is mounted inside another ASGI app.
 
-Linux servers tell capitals apart in file names, and Windows and macOS do not: there,
-``/static/Logo.svg`` serves ``logo.svg``, and the link breaks only once deployed. ``--dev`` logs a
-warning the first time a URL under ``app.static`` is spelled differently from its file.
+Spell file names in URLs exactly as on disk. Windows and macOS ignore capitals, so
+``/static/Logo.svg`` serves ``logo.svg`` while you develop, but a Linux server answers 404. ``--dev``
+logs a warning the first time a URL under ``app.static`` is spelled differently from its file.
 
 .. important::
 
@@ -332,10 +332,15 @@ Containers
 
       FROM python:3.13-slim
       WORKDIR /srv
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
       COPY . .
-      RUN pip install --no-cache-dir "rational[db]" .
       ENV RATIONAL_ENV=production
       CMD ["python", "app.py", "--prod"]
+
+   ``requirements.txt`` is the one ``rational new`` writes (add ``rational[db]`` and your database
+   driver if you use one). Copying it first lets Docker reuse the installed packages when only your
+   code changes.
 
 Content Security Policy
    ``App(csp=True)`` sends a strict policy with a per-response nonce. No inline

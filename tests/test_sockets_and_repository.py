@@ -352,6 +352,12 @@ class Note(Base):
     stars: Mapped[int] = mapped_column(default=0)
 
 
+def test_repository_is_importable_from_backend():
+    import rational.backend
+
+    assert rational.backend.Repository is Repository
+
+
 def test_repository_crud_and_pages(tmp_path):
     async def run():
         db = Database(f"sqlite+aiosqlite:///{(tmp_path / 'notes.db').as_posix()}", metadata=Base.metadata)
