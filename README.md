@@ -222,7 +222,7 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Internationalization
 - [x] Optional Bootstrap and Tailwind adapters
 
-**0.4: client side and production batteries** *(this release)*
+**0.4: client side and production batteries**
 - [x] Client components: Python compiled to JavaScript, rendered by the server first, hydrated in the browser
 - [x] `@computed`, `@watch`, two-way `bind=`, `provide`/`inject`, view transitions
 - [x] Passwords, JSON Web Tokens, signing and encryption (`rational.security`), app cookies
@@ -246,7 +246,16 @@ See [docs/benchmarks.rst](docs/benchmarks.rst) for the method and the micro-benc
 - [x] Snapshot restore that checks saved state against the deployed components, else reloads cleanly
 - [x] Postgres session driver (any SQL database through SQLAlchemy)
 
-**0.5: more batteries**
+**0.5: the same on Linux, Windows and macOS** *(this release)*
+- [x] The whole framework and every example run end to end on Debian 13 and Windows 11
+- [x] Stopping is immediate with live pages open, and `on_shutdown` hooks always run (`--dev` on
+      Windows included)
+- [x] `--root-path` and mounted apps prefix the app's own links, client components and favicon
+- [x] Database and Redis connections survive a server restart
+- [x] Socket rooms and live sessions across forked workers (`gunicorn --preload`)
+- [x] `--dev` warns about static URLs whose capitals differ from the file's (a 404 on Linux)
+
+**0.6: more batteries**
 - [ ] File uploads and storage (local, S3), with size and type checks
 - [ ] Admin panel generated from SQLAlchemy models
 - [ ] Two-factor sign-in (TOTP), then passkeys

@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.4.0a3] - 2026-11-23
+## [0.5.0a1] - 2026-11-23
 
 Everything run on Linux (Debian 13) and Windows 11, with what that turned up fixed: clean shutdown
 with open pages, `--dev` on Windows running `on_shutdown` hooks, root paths on the app's own links,
