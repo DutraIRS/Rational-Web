@@ -314,6 +314,19 @@ Behind a reverse proxy / CDN
    Terminate TLS at the proxy, forward ``X-Forwarded-Proto`` so cookies get ``Secure``,
    and cache ``/_rational/*.js|css`` aggressively (their URLs are content-hashed).
 
+   To talk to the proxy over a Unix socket, keep the socket in a folder only the app and the
+   proxy can enter: uvicorn always makes the socket itself world-writable (mode 0666), so the
+   folder's permissions are what keep other local users out. With systemd::
+
+      [Service]
+      User=myapp
+      Group=www-data
+      RuntimeDirectory=myapp
+      RuntimeDirectoryMode=0750
+      ExecStart=/srv/myapp/.venv/bin/uvicorn app:app --uds /run/myapp/app.sock --proxy-headers
+
+   and point the proxy at it (nginx: ``proxy_pass http://unix:/run/myapp/app.sock;``).
+
 Containers
    .. code-block:: dockerfile
 
