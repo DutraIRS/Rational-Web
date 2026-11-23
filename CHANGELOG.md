@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0a3] - 2026-11-23
+
+Everything run on Linux (Debian 13) and Windows 11, with what that turned up fixed: clean shutdown
+with open pages, `--dev` on Windows running `on_shutdown` hooks, root paths on the app's own links,
+connections that survive a database or Redis restart, and corrected docs.
+
 ### Added
 - The docs have a logo: the owl of Athena, in the sidebar and as the favicon, with link and highlight
   colours to match; the README shows it too.
