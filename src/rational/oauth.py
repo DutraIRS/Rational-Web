@@ -16,9 +16,13 @@
 redirect URI to register with the provider) checks the answer, asks the provider's server who the
 person is, calls ``on_login`` and signs the returned principal in with ``session.login``.
 
-The request carries a one-time ``state`` (against cross-site request forgery), a ``nonce`` and a
-PKCE challenge, so an intercepted code is useless. The identity is read from the provider over
-HTTPS rather than from a token the browser could have touched.
+The request carries a one-time ``state``, bound to this browser by a short-lived cookie (against
+cross-site request forgery), and a PKCE challenge, so an intercepted code cannot be exchanged by
+anyone else. The identity is read from the provider's userinfo endpoint over HTTPS rather than from
+a token the browser could have touched. Apple, which has no such endpoint, returns an ID token
+straight from its token endpoint; its issuer, audience, expiry and ``nonce`` are checked. For the
+others the ``nonce`` is sent but plays no part, since no ID token is read. A provider found by
+discovery (:func:`google`, :func:`oidc`) must name the configured issuer in its discovery document.
 
 Match people by ``person.id``. Email addresses can change hands, and only trust one when
 ``person.email_verified`` is true (Microsoft does not report it, so it is false there).
@@ -91,7 +95,10 @@ class Provider:
         """Fill in the endpoints from the issuer's discovery document, once."""
         if self.authorize_url or self.issuer is None:
             return
-        config = await _http.request("GET", f"{self.issuer.rstrip('/')}/.well-known/openid-configuration")
+        issuer = self.issuer.rstrip("/")
+        config = await _http.request("GET", f"{issuer}/.well-known/openid-configuration")
+        if str(config.get("issuer", "")).rstrip("/") != issuer:  # OpenID Connect Discovery 1.0, section 4.3
+            raise ValueError(f"the discovery document at {issuer} names another issuer: {config.get('issuer')!r}")
         endpoints = config["authorization_endpoint"], config["token_endpoint"], config["userinfo_endpoint"]
         self.authorize_url, self.token_url, self.userinfo_url = endpoints  # all of them, or none
 
@@ -244,6 +251,14 @@ class Apple(Provider):
         )
 
 
+async def _provider_answer(request: Request) -> dict[str, str]:
+    """The parameters the provider sent back: a form post (Apple) or the query string of a redirect."""
+    if request.method == "POST":
+        body = (await request.body()).decode("utf-8", "replace")
+        return {k: v[0] for k, v in parse_qs(body).items()}
+    return dict(request.query_params)
+
+
 def _id_token_claims(id_token: str) -> dict[str, Any]:
     parts = id_token.split(".")
     if len(parts) != 3:
@@ -301,7 +316,7 @@ class OAuth:
             return self._fail(request, 404, "Unknown sign-in provider")
         try:
             await chosen.endpoints()
-        except (_http.HTTPError, KeyError, TypeError):
+        except (_http.HTTPError, KeyError, TypeError, ValueError):  # ValueError: another issuer answered
             return self._fail(request, 502, f"Could not sign in with {provider}; please try again")
         verifier = secrets.token_urlsafe(48)
         flow = {
@@ -357,15 +372,9 @@ class OAuth:
 
     async def _complete(self, request: Request, provider: str, ctx: Context, flow: Any) -> Response:
         chosen = self.providers.get(provider)
-        form_user = None
-        if request.method == "POST":  # Apple answers with a form post, not a redirect
-            if chosen is None or chosen.response_mode != "form_post":
-                return self._fail(request, 405, "This sign-in link is not valid; please start again")
-            body = (await request.body()).decode("utf-8", "replace")
-            query = {k: v[0] for k, v in parse_qs(body).items()}
-            form_user = query.get("user")
-        else:
-            query = dict(request.query_params)
+        if request.method == "POST" and (chosen is None or chosen.response_mode != "form_post"):
+            return self._fail(request, 405, "This sign-in link is not valid; please start again")
+        query = await _provider_answer(request)  # Apple answers with a form post, the others with a redirect
         if chosen is None or not isinstance(flow, dict) or flow.get("provider") != provider:
             return self._fail(request, 400, "This sign-in link is not valid; please start again")
         if not same_text(str(query.get("state", "")), str(flow["state"])):
@@ -373,22 +382,8 @@ class OAuth:
         if "error" in query or "code" not in query:
             return self._fail(request, 400, "Sign-in was cancelled")
         try:
-            tokens = await _http.request(
-                "POST",
-                chosen.token_url,
-                form={
-                    "grant_type": "authorization_code",
-                    "code": query["code"],
-                    "redirect_uri": self.redirect_uri(provider),
-                    "client_id": chosen.client_id,
-                    "client_secret": chosen.secret(),
-                    **({"code_verifier": flow["verifier"]} if chosen.pkce else {}),
-                },
-            )
-            if isinstance(chosen, Apple):
-                person = chosen.from_id_token(tokens["id_token"], nonce=flow["nonce"], form_user=form_user)
-            else:
-                person = await chosen.user(tokens["access_token"])
+            form_user = query.get("user") if request.method == "POST" else None  # Apple: the name, first time only
+            person = await self._person(chosen, provider, query, flow, form_user)
         except (_http.HTTPError, KeyError, TypeError, ValueError, AttributeError):  # a service's unexpected answer
             return self._fail(request, 502, f"Could not sign in with {provider}; please try again")
         try:
@@ -401,6 +396,26 @@ class OAuth:
             return self._fail(request, 403, "This account cannot sign in here")
         ctx.session.login(principal)
         return RedirectResponse(base_path(request) + flow["next"], status_code=303)
+
+    async def _person(
+        self, chosen: Provider, provider: str, query: dict[str, str], flow: dict[str, Any], form_user: str | None
+    ) -> OAuthUser:
+        """Exchange the code for tokens, and learn from them who signed in."""
+        tokens = await _http.request(
+            "POST",
+            chosen.token_url,
+            form={
+                "grant_type": "authorization_code",
+                "code": query["code"],
+                "redirect_uri": self.redirect_uri(provider),
+                "client_id": chosen.client_id,
+                "client_secret": chosen.secret(),
+                **({"code_verifier": flow["verifier"]} if chosen.pkce else {}),
+            },
+        )
+        if isinstance(chosen, Apple):
+            return chosen.from_id_token(tokens["id_token"], nonce=flow["nonce"], form_user=form_user)
+        return await chosen.user(tokens["access_token"])
 
     def _fail(self, request: Request, status: int, message: str) -> Response:
         from .pages import error_page

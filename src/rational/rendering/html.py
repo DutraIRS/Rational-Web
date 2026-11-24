@@ -29,31 +29,32 @@ def to_html(node: Any, *, component_ids: bool = True) -> str:
     return "".join(parts)
 
 
+def _write_element(node: Node, out: list[str], component_ids: bool) -> None:
+    if node.events or node.style is not None or node.client:
+        raise ValueError(f"<{node.tag}> is unresolved; render it through the Renderer")
+    out.append("<")
+    out.append(node.tag)
+    for name, value in node.attrs:
+        if value is None or value is False or (name == "data-rw-c" and not component_ids):
+            continue
+        out.append(f" {name}" if value is True else f' {name}="{escape_attr(str(value))}"')
+    out.append(">")
+    if node.tag in VOID_TAGS:
+        if node.children:
+            raise ValueError(f"<{node.tag}> cannot have children")
+        return
+    for child in node.children:
+        _write(child, out, component_ids)
+    out.append(f"</{node.tag}>")
+
+
 def _write(node: Any, out: list[str], component_ids: bool) -> None:
     if isinstance(node, TextNode):
         out.append(escape_text(node.text))
     elif isinstance(node, RawHTML):
         out.append(node.html)
     elif isinstance(node, Node):
-        if node.events or node.style is not None or node.client:
-            raise ValueError(f"<{node.tag}> is unresolved; render it through the Renderer")
-        out.append("<")
-        out.append(node.tag)
-        for name, value in node.attrs:
-            if value is None or value is False or (name == "data-rw-c" and not component_ids):
-                continue
-            if value is True:
-                out.append(f" {name}")
-            else:
-                out.append(f' {name}="{escape_attr(str(value))}"')
-        out.append(">")
-        if node.tag in VOID_TAGS:
-            if node.children:
-                raise ValueError(f"<{node.tag}> cannot have children")
-            return
-        for child in node.children:
-            _write(child, out, component_ids)
-        out.append(f"</{node.tag}>")
+        _write_element(node, out, component_ids)
     elif isinstance(node, (list, tuple)):
         for child in node:
             _write(child, out, component_ids)

@@ -96,8 +96,15 @@ class MailBackend(Protocol):
     async def send(self, email: Email) -> None: ...
 
 
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
 class SMTP:
-    """Any SMTP server. ``security``: ``"starttls"`` (port 587), ``"tls"`` (port 465) or ``"none"``."""
+    """Any SMTP server. ``security``: ``"starttls"`` (port 587), ``"tls"`` (port 465) or ``"none"``.
+
+    With ``"none"`` nothing is encrypted, so a ``username`` (whose password would cross the network in
+    clear text) is refused unless the server runs on this machine.
+    """
 
     def __init__(
         self,
@@ -111,6 +118,10 @@ class SMTP:
     ) -> None:
         if security not in ("starttls", "tls", "none"):
             raise ValueError('security must be "starttls", "tls" or "none"')
+        if security == "none" and username is not None and host not in _LOCAL_HOSTS:
+            raise ValueError(
+                f'refusing to send an SMTP password in clear text to {host}: use security="starttls" or "tls"'
+            )
         self.host = host
         self.port = port or {"starttls": 587, "tls": 465, "none": 25}[security]
         self.username = username

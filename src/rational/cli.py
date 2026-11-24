@@ -235,29 +235,33 @@ def _db(argv: Sequence[str]) -> None:
 
         if args.action == "init":
             print(f"Created {migrations.init(args.directory)}/")
-            return
-        app, _target = load_target(args.target, args.app_dir)
-        if app.db is None:
-            raise SystemExit("rational db: the app has no database; pass App(database=Database(...))")
-        db = app.db
-        if args.action == "revision":
-            if not args.message:
-                raise SystemExit("rational db revision: -m MESSAGE is required")
-            migrations.revision(db, args.directory, args.message, args.autogenerate)
-        elif args.action == "upgrade":
-            migrations.upgrade(db, args.directory, args.revision or "head")
-        elif args.action == "downgrade":
-            migrations.downgrade(db, args.directory, args.revision or "-1")
-        elif args.action == "current":
-            migrations.current(db, args.directory)
         else:
-            migrations.history(db, args.directory)
+            _migrate(args)
     except ImportError as exc:
         if (exc.name or "").partition(".")[0] not in ("alembic", "sqlalchemy"):
             raise  # the app's own import failed: its traceback says more than a hint could
         raise SystemExit(f"rational db: {exc}; pip install 'rational[migrations]'") from None
     except (TargetError, migrations.MigrationError) as exc:
         raise SystemExit(f"rational db: {exc}") from None
+
+
+def _migrate(args: argparse.Namespace) -> None:
+    """``rational db`` actions other than ``init``, on the database of the app ``args.target`` names."""
+    from .backend import migrations
+
+    app, _target = load_target(args.target, args.app_dir)
+    if app.db is None:
+        raise SystemExit("rational db: the app has no database; pass App(database=Database(...))")
+    db, directory = app.db, args.directory
+    if args.action == "revision":
+        if not args.message:
+            raise SystemExit("rational db revision: -m MESSAGE is required")
+        migrations.revision(db, directory, args.message, args.autogenerate)
+    elif args.action in ("upgrade", "downgrade"):
+        default = "head" if args.action == "upgrade" else "-1"
+        getattr(migrations, args.action)(db, directory, args.revision or default)
+    else:  # current, history
+        getattr(migrations, args.action)(db, directory)
 
 
 def _new(argv: Sequence[str]) -> None:
@@ -280,7 +284,8 @@ def _serve_broken(argv: Sequence[str], args: argparse.Namespace) -> None:
     import uvicorn
 
     exc = sys.exc_info()[1]
-    assert exc is not None
+    if exc is None:
+        raise RuntimeError("_serve_broken runs while handling the import error")
     traceback_module.print_exception(type(exc), exc, exc.__traceback__)
     host = args.host or "127.0.0.1"
     port = args.port or int(os.environ.get("PORT", 8000))

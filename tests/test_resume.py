@@ -53,7 +53,7 @@ def test_page_resumes_after_its_runtime_is_evicted():
         view.click("bump")
         assert "count=2" in view.html and "total=10" in view.html
 
-        page_id = next(iter(app.pages._items)) if hasattr(app.pages, "_items") else None
+        page_id = app.pages.values()[0].id if len(app.pages) else None
         assert page_id is not None
         app.pages.pop(page_id)  # the process forgot the page
         assert app.pages.get(page_id) is None
@@ -83,7 +83,7 @@ def test_a_snapshot_write_loses_to_a_concurrent_one():
     app, _ = make_app()
     with TestClient(app) as client:
         client.open("/items/1")
-        runtime = next(iter(app.pages._items.values()))[1]
+        runtime = app.pages.values()[0]
         runtime.revision = 1  # this worker advanced the page from revision 0...
         assert asyncio.run(app.resume.save(runtime, expect_revision=0))
         runtime.revision = 1  # ...and so did another worker, from the same revision
@@ -105,7 +105,7 @@ def test_unknown_page_without_snapshots_is_still_gone():
 
     with TestClient(app) as client:
         view = client.open("/")
-        app.pages.pop(next(iter(app.pages._items)))
+        app.pages.pop(app.pages.values()[0].id)
         with pytest.raises(EventFailedError, match="410"):
             view.click("n=0")
         assert "n=0" in view.html  # the page is reloaded, the click is lost
@@ -115,7 +115,7 @@ def test_snapshot_skips_values_that_are_not_json():
     app, _ = make_app()
     with TestClient(app) as client:
         client.open("/items/1")
-        runtime = next(iter(app.pages._items.values()))[1]
+        runtime = app.pages.values()[0]
         comp = next(c for c in runtime.components.values() if c.path and c.path.endswith("Counter:0"))
         comp._rw_state["blob"] = {1, 2}
         snap = app.resume.snapshot(runtime)

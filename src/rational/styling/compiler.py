@@ -130,148 +130,159 @@ class StyleCompiler:
             return f"var(--rw-{var}-{value})"
         return _safe(value)
 
-    def _property_table(self) -> dict[str, Callable[[Style, Any], list[tuple[str, str]]]]:
-        theme = self.theme
-        Handler = Callable[[Style, Any], list[tuple[str, str]]]  # noqa: N806
-
-        def plain(css: str, mapping: Mapping[str, str] | None = None) -> Handler:
-            def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
-                text = str(v)
-                return [(css, mapping.get(text, text) if mapping else _safe(text))]
-
-            return fn
-
-        def length(css: str, scale: Mapping[str, str] | None = None, var: str = "space") -> Handler:
-            def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
-                return [(css, self._token(scale or {}, var, v))]
-
-            return fn
-
-        def space(*props: str) -> Handler:
-            def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
-                value = self._token(theme.space, "space", v)
-                return [(p, value) for p in props]
-
-            return fn
-
-        def color(css: str) -> Handler:
-            def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
-                if v in theme.color_names:
-                    return [(css, f"var(--rw-color-{v.replace('_', '-')})")]
-                return [(css, _safe(str(v)))]
-
-            return fn
-
-        def border(css: str) -> Handler:
-            def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
-                if v is True:
-                    return [(css, "1px solid var(--rw-color-border)")]
-                if v is False:
-                    return [(css, "0")]
-                return [(css, _safe(str(v)))]
-
-            return fn
-
-        def layout(s: Style, v: Any) -> list[tuple[str, str]]:
-            if v not in ("vertical", "horizontal"):
-                raise StyleError(f"layout must be 'vertical' or 'horizontal', not {v!r}")
-            out = [] if s.display is not None else [("display", "flex")]
-            return [*out, ("flex-direction", "column" if v == "vertical" else "row")]
-
-        def wrap(_s: Style, v: Any) -> list[tuple[str, str]]:
-            return [("flex-wrap", "wrap" if v is True else "nowrap" if v is False else _safe(str(v)))]
-
-        def tracks(css: str) -> Handler:
-            def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
-                if isinstance(v, int):
-                    return [(css, f"repeat({v},minmax(0,1fr))")]
-                return [(css, _safe(str(v)))]
-
-            return fn
-
-        def span(_s: Style, v: Any) -> list[tuple[str, str]]:
-            return [("grid-column", f"span {v}/span {v}" if isinstance(v, int) else _safe(str(v)))]
-
-        def transition(_s: Style, v: Any) -> list[tuple[str, str]]:
-            if v is True:
-                return [("transition", _DEFAULT_TRANSITION)]
-            return [("transition", "none" if v is False else _safe(str(v)))]
-
-        def font_family(_s: Style, v: Any) -> list[tuple[str, str]]:
-            if v in theme.fonts:
-                return [("font-family", f"var(--rw-font-{v})")]
-            return [("font-family", _safe(str(v)))]
-
-        def shadow(_s: Style, v: Any) -> list[tuple[str, str]]:
-            if v in theme.shadows:
-                return [("box-shadow", f"var(--rw-shadow-{v})")]
-            return [("box-shadow", _safe(str(v)))]
-
+    def _property_table(self) -> dict[str, Handler]:
+        h = _Handlers(self)
         table: dict[str, Handler] = {
-            "display": plain("display"),
-            "layout": layout,
-            "direction": plain("flex-direction"),
-            "wrap": wrap,
-            "justify": plain("justify-content", _ALIGN),
-            "align": plain("align-items", _ALIGN),
-            "align_self": plain("align-self"),
-            "gap": space("gap"),
-            "row_gap": space("row-gap"),
-            "column_gap": space("column-gap"),
-            "grow": plain("flex-grow"),
-            "shrink": plain("flex-shrink"),
-            "basis": length("flex-basis"),
-            "columns": tracks("grid-template-columns"),
-            "rows": tracks("grid-template-rows"),
-            "column_span": span,
-            "position": plain("position"),
-            "z_index": plain("z-index"),
-            "overflow": plain("overflow"),
-            "overflow_x": plain("overflow-x"),
-            "overflow_y": plain("overflow-y"),
-            "padding_x": space("padding-inline"),
-            "padding_y": space("padding-block"),
-            "margin_x": space("margin-inline"),
-            "margin_y": space("margin-block"),
-            "aspect_ratio": plain("aspect-ratio"),
-            "font_family": font_family,
-            "font_size": length("font-size", theme.font_size, "font-size"),
-            "font_weight": plain("font-weight"),
-            "line_height": plain("line-height"),
-            "letter_spacing": length("letter-spacing"),
-            "text_align": plain("text-align"),
-            "text_transform": plain("text-transform"),
-            "text_decoration": plain("text-decoration"),
-            "white_space": plain("white-space"),
-            "color": color("color"),
-            "background": color("background"),
-            "border_color": color("border-color"),
-            "border_width": length("border-width"),
-            "border_style": plain("border-style"),
-            "border_radius": length("border-radius", theme.radius, "radius"),
-            "outline": plain("outline"),
-            "shadow": shadow,
-            "opacity": plain("opacity"),
-            "cursor": plain("cursor"),
-            "transition": transition,
-            "transform": plain("transform"),
-            "pointer_events": plain("pointer-events"),
-            "user_select": plain("user-select"),
-            "list_style": plain("list-style"),
-            "object_fit": plain("object-fit"),
-            "container_type": plain("container-type"),
-            "container_name": plain("container-name"),
+            "display": h.plain("display"),
+            "layout": h.layout,
+            "direction": h.plain("flex-direction"),
+            "wrap": h.wrap,
+            "justify": h.plain("justify-content", _ALIGN),
+            "align": h.plain("align-items", _ALIGN),
+            "align_self": h.plain("align-self"),
+            "gap": h.space("gap"),
+            "row_gap": h.space("row-gap"),
+            "column_gap": h.space("column-gap"),
+            "grow": h.plain("flex-grow"),
+            "shrink": h.plain("flex-shrink"),
+            "basis": h.length("flex-basis"),
+            "columns": h.tracks("grid-template-columns"),
+            "rows": h.tracks("grid-template-rows"),
+            "column_span": h.span,
+            "position": h.plain("position"),
+            "z_index": h.plain("z-index"),
+            "overflow": h.plain("overflow"),
+            "overflow_x": h.plain("overflow-x"),
+            "overflow_y": h.plain("overflow-y"),
+            "padding_x": h.space("padding-inline"),
+            "padding_y": h.space("padding-block"),
+            "margin_x": h.space("margin-inline"),
+            "margin_y": h.space("margin-block"),
+            "aspect_ratio": h.plain("aspect-ratio"),
+            "font_family": h.font_family,
+            "font_size": h.length("font-size", self.theme.font_size, "font-size"),
+            "font_weight": h.plain("font-weight"),
+            "line_height": h.plain("line-height"),
+            "letter_spacing": h.length("letter-spacing"),
+            "text_align": h.plain("text-align"),
+            "text_transform": h.plain("text-transform"),
+            "text_decoration": h.plain("text-decoration"),
+            "white_space": h.plain("white-space"),
+            "color": h.color("color"),
+            "background": h.color("background"),
+            "border_color": h.color("border-color"),
+            "border_width": h.length("border-width"),
+            "border_style": h.plain("border-style"),
+            "border_radius": h.length("border-radius", self.theme.radius, "radius"),
+            "outline": h.plain("outline"),
+            "shadow": h.shadow,
+            "opacity": h.plain("opacity"),
+            "cursor": h.plain("cursor"),
+            "transition": h.transition,
+            "transform": h.plain("transform"),
+            "pointer_events": h.plain("pointer-events"),
+            "user_select": h.plain("user-select"),
+            "list_style": h.plain("list-style"),
+            "object_fit": h.plain("object-fit"),
+            "container_type": h.plain("container-type"),
+            "container_name": h.plain("container-name"),
         }
         for side in ("", "_top", "_right", "_bottom", "_left"):
-            table[f"padding{side}"] = space(f"padding{side.replace('_', '-')}")
-            table[f"margin{side}"] = space(f"margin{side.replace('_', '-')}")
+            table[f"padding{side}"] = h.space(f"padding{side.replace('_', '-')}")
+            table[f"margin{side}"] = h.space(f"margin{side.replace('_', '-')}")
         for prop in ("top", "right", "bottom", "left", "inset"):
-            table[prop] = space(prop)
+            table[prop] = h.space(prop)
         for prop in ("width", "height", "min_width", "max_width", "min_height", "max_height"):
-            table[prop] = length(prop.replace("_", "-"))
+            table[prop] = h.length(prop.replace("_", "-"))
         for prop in ("border", "border_top", "border_right", "border_bottom", "border_left"):
-            table[prop] = border(prop.replace("_", "-"))
+            table[prop] = h.border(prop.replace("_", "-"))
         return table
+
+
+Handler = Callable[[Style, Any], list[tuple[str, str]]]  # a Style attribute's value -> CSS declarations
+
+
+class _Handlers:
+    """How each kind of Style attribute becomes CSS declarations, with the compiler's theme."""
+
+    def __init__(self, compiler: StyleCompiler) -> None:
+        self.compiler = compiler
+        self.theme = compiler.theme
+
+    def plain(self, css: str, mapping: Mapping[str, str] | None = None) -> Handler:
+        def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
+            text = str(v)
+            if mapping is not None and text in mapping:
+                return [(css, mapping[text])]
+            return [(css, _safe(text))]  # anything else is checked, whatever type it came as
+
+        return fn
+
+    def length(self, css: str, scale: Mapping[str, str] | None = None, var: str = "space") -> Handler:
+        def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
+            return [(css, self.compiler._token(scale or {}, var, v))]
+
+        return fn
+
+    def space(self, *props: str) -> Handler:
+        def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
+            value = self.compiler._token(self.theme.space, "space", v)
+            return [(p, value) for p in props]
+
+        return fn
+
+    def color(self, css: str) -> Handler:
+        def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
+            if v in self.theme.color_names:
+                return [(css, f"var(--rw-color-{v.replace('_', '-')})")]
+            return [(css, _safe(str(v)))]
+
+        return fn
+
+    def border(self, css: str) -> Handler:
+        def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
+            if v is True:
+                return [(css, "1px solid var(--rw-color-border)")]
+            if v is False:
+                return [(css, "0")]
+            return [(css, _safe(str(v)))]
+
+        return fn
+
+    def layout(self, s: Style, v: Any) -> list[tuple[str, str]]:
+        if v not in ("vertical", "horizontal"):
+            raise StyleError(f"layout must be 'vertical' or 'horizontal', not {v!r}")
+        out = [] if s.display is not None else [("display", "flex")]
+        return [*out, ("flex-direction", "column" if v == "vertical" else "row")]
+
+    def wrap(self, _s: Style, v: Any) -> list[tuple[str, str]]:
+        return [("flex-wrap", "wrap" if v is True else "nowrap" if v is False else _safe(str(v)))]
+
+    def tracks(self, css: str) -> Handler:
+        def fn(_s: Style, v: Any) -> list[tuple[str, str]]:
+            if isinstance(v, int):
+                return [(css, f"repeat({v},minmax(0,1fr))")]
+            return [(css, _safe(str(v)))]
+
+        return fn
+
+    def span(self, _s: Style, v: Any) -> list[tuple[str, str]]:
+        return [("grid-column", f"span {v}/span {v}" if isinstance(v, int) else _safe(str(v)))]
+
+    def transition(self, _s: Style, v: Any) -> list[tuple[str, str]]:
+        if v is True:
+            return [("transition", _DEFAULT_TRANSITION)]
+        return [("transition", "none" if v is False else _safe(str(v)))]
+
+    def font_family(self, _s: Style, v: Any) -> list[tuple[str, str]]:
+        if v in self.theme.fonts:
+            return [("font-family", f"var(--rw-font-{v})")]
+        return [("font-family", _safe(str(v)))]
+
+    def shadow(self, _s: Style, v: Any) -> list[tuple[str, str]]:
+        if v in self.theme.shadows:
+            return [("box-shadow", f"var(--rw-shadow-{v})")]
+        return [("box-shadow", _safe(str(v)))]
 
 
 def _safe(value: str) -> str:

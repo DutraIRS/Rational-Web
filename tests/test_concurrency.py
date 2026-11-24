@@ -4,7 +4,7 @@ import time
 import anyio
 import pytest
 
-from rational import App, Button, Column, Component, Page, State, Text, threaded, timeout
+from rational import App, Button, Column, Component, Limits, Page, State, Text, threaded, timeout
 from rational.backend.services import Service, remote
 from rational.concurrency import HandlerTimeout, cancel_and_wait, invoke
 from rational.testing import TestClient
@@ -79,7 +79,7 @@ def make_app(**options):
 
 
 def test_handler_timeout_returns_504_and_page_keeps_working():
-    app, _ = make_app(handler_timeout=0.05)
+    app, _ = make_app(limits=Limits(handler_timeout=0.05))
     page = TestClient(app).open("/")
 
     result = press(page, "Slow")
@@ -90,7 +90,7 @@ def test_handler_timeout_returns_504_and_page_keeps_working():
 
 
 def test_per_handler_timeout_overrides_app_default():
-    app, _ = make_app(handler_timeout=0.01)
+    app, _ = make_app(limits=Limits(handler_timeout=0.01))
     page = TestClient(app).open("/")
 
     page.click("Unlimited")
@@ -135,7 +135,7 @@ def test_threaded_decorator_overrides_the_app_default():
 
 def test_invalid_options_are_rejected():
     with pytest.raises(ValueError):
-        App(handler_timeout=0)
+        Limits(handler_timeout=0)
     with pytest.raises(ValueError):
         App(sync_handlers="fork")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
@@ -158,7 +158,7 @@ async def test_invoke_passes_keyword_arguments_even_named_timeout():
 
 
 def test_remote_methods_honour_timeout_and_threads():
-    app = App(handler_timeout=0.05, sync_handlers="thread")
+    app = App(limits=Limits(handler_timeout=0.05), sync_handlers="thread")
     ran_in: dict[str, object] = {}
 
     @app.service

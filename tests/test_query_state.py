@@ -59,7 +59,7 @@ def test_a_resumed_page_keeps_its_search():
     client = TestClient(app)
     view = client.open("/search?q=tea")
     view.click("Next")
-    app.pages.pop(next(iter(app.pages._items)))  # the worker forgot the page
+    app.pages.pop(app.pages.values()[0].id)  # the worker forgot the page
     view.click("Next")
     assert "q=tea page=3" in view.text
 

@@ -112,8 +112,11 @@ line-length = 120
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "N"]
+select = ["E", "F", "I", "B", "UP", "SIM", "N", "C90"]
 ignore = ["N802"]  # primitives are capitalized functions on purpose (Text, Button, ...)
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10  # the review of 2026-11-24 found 16 functions above it; keep it that way
 
 [tool.ruff.lint.isort]
 known-first-party = ["rational"]

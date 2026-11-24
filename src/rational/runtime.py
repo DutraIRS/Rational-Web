@@ -14,9 +14,7 @@ import inspect
 import itertools
 import json
 import logging
-import math
 import secrets
-import time
 from collections import Counter
 from collections.abc import Callable, Coroutine
 from dataclasses import replace
@@ -90,8 +88,6 @@ class PageRuntime:
         self.session_revision = -1
         self.interactive = False
         self.lock = asyncio.Lock()
-        self.tokens = math.inf  # start with a full bucket
-        self.token_stamp = time.monotonic()
         self._cids = itertools.count()
         self._visited: set[str] = set()
         # Server push: background tasks mutate state, and the pusher streams the resulting patches.
@@ -138,7 +134,8 @@ class PageRuntime:
             stack.extend(c for c in current.children if isinstance(c, Node))
 
     async def rerender(self, component: Component) -> Node:
-        assert component.cid is not None and component.path is not None
+        if component.cid is None or component.path is None:
+            raise RuntimeError(f"{type(component).__name__} is not mounted on this page")
         before = self._descendants(component.cid)
         self._visited = set()
         node = await self._render_component(component, component.path, self.parent[component.cid])
@@ -149,8 +146,7 @@ class PageRuntime:
 
     async def _render_component(self, comp: Component, path: str, parent: str | None) -> Node:
         comp = await self._mount_or_reuse(comp, path, parent)
-        cid = comp.cid
-        assert cid is not None
+        cid = _mounted(comp)
         if cid in self._visited:
             raise ValueError(f"duplicate component identity {path!r}; give siblings distinct key= values")
         self._visited.add(cid)
@@ -194,7 +190,8 @@ class PageRuntime:
         if app is None:
             raise RuntimeError("client components need an App")
         module = app.client_module(type(comp))
-        assert module is not None
+        if module is None:
+            raise RuntimeError(f"{type(comp).__name__} renders itself while being compiled")
         self._use_module(module)
         attrs: list[tuple[str, AttrValue]] = [
             ("data-rw-island", module.key),
@@ -215,7 +212,8 @@ class PageRuntime:
         if module.path in self.islands:
             return
         app = self.context.app
-        assert app is not None
+        if app is None:
+            raise RuntimeError("client components need an App")
         if self.served:
             if not self.islands:  # the first one on this page: the island runtime comes first
                 self._new_scripts.append(app.islands_src)
@@ -357,8 +355,7 @@ class PageRuntime:
     def _register(self, frame: Frame, handler: Callable[..., Any], event: str) -> str:
         check_signature(handler)
         frame.handler_seq += 1
-        cid = frame.component.cid
-        assert cid is not None
+        cid = _mounted(frame.component)
         hid = f"{cid}.{frame.handler_seq}"
         self.handlers[hid] = (frame.component, handler, event)
         self.component_handlers.setdefault(cid, []).append(hid)
@@ -394,7 +391,7 @@ class PageRuntime:
             raise TypeError("run_task() needs an async function")
         if self.closed:
             raise RuntimeError("the page is gone")
-        assert comp.cid is not None
+        cid = _mounted(comp)
         self.interactive = True
         self.wants_stream = True
         if self.served:
@@ -402,7 +399,7 @@ class PageRuntime:
         ctx = contextvars.copy_context()
         ctx.run(current_frame.set, None)
         task = asyncio.get_running_loop().create_task(self._run_task(fn, args, kwargs), context=ctx)
-        self.tasks[task] = comp.cid
+        self.tasks[task] = cid
         task.add_done_callback(self.tasks.pop)
         return task
 
@@ -507,7 +504,7 @@ class PageRuntime:
         if not any(cell[0] == "s" for cell in self.deps):
             return
         session.listeners.add(self)
-        app.follow_sessions()
+        app.follow_sessions(session)
         if not self.wants_stream:
             self.wants_stream = True
             if self.served:
@@ -658,6 +655,7 @@ class PageRuntime:
         self.closed = True
         if self.session is not None:
             self.session.listeners.discard(self)
+            self.session.pages.pop(self.id, None)
         for cid in list(self.components):
             self._unmount_one(cid)
         for task in list(self.tasks):
@@ -665,7 +663,7 @@ class PageRuntime:
         self.publish(None)  # closes any open streams
 
     def dispose_when_free(self) -> None:
-        """Eviction path (synchronous, from TTLStore): never unmount under a running handler.
+        """Eviction path (synchronous, from the page store): never unmount under a running handler.
 
         If an event or push holds ``lock``, disposal waits for it; otherwise it runs now. Safe on a
         single event loop: the check and the call are one synchronous block, so no handler can start
@@ -687,14 +685,12 @@ class PageRuntime:
         async with self.lock:
             self.dispose()
 
-    def allow_event(self, burst: int, per_second: float) -> bool:
-        now = time.monotonic()
-        self.tokens = min(burst, self.tokens + (now - self.token_stamp) * per_second)
-        self.token_stamp = now
-        if self.tokens < 1:
-            return False
-        self.tokens -= 1
-        return True
+
+def _mounted(comp: Component) -> str:
+    """The component's id on this page; it has one from the moment it is mounted."""
+    if comp.cid is None:
+        raise RuntimeError(f"{type(comp).__name__} is not mounted on this page")
+    return comp.cid
 
 
 def _island_json(comp: Component, values: dict[str, Any], what: str) -> str:

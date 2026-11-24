@@ -268,7 +268,7 @@ async def _serve(app: App, socket: Socket, adapter: TypeAdapter[Any]) -> None:
         workers.append(asyncio.create_task(socket._keep_checking_auth()))
         if session is not None:
             session.listeners.add(socket)
-            app.follow_sessions()
+            app.follow_sessions(session)
     try:
         await socket.connect()
         await _messages(socket, adapter)
@@ -280,21 +280,27 @@ async def _serve(app: App, socket: Socket, adapter: TypeAdapter[Any]) -> None:
         await app.report_error(exc, "socket", f"error in socket {cls.__name__}", context=socket.context, socket=cls)
         await socket._close(SERVER_ERROR)
     finally:
-        socket._closing = True
-        for worker in workers:
-            worker.cancel()  # first: they stop whatever happens below
-        if session is not None:
-            session.listeners.discard(socket)
-        for room in list(socket.rooms):
-            try:
-                await app.rooms.leave(room, socket)
-            except Exception:
-                log.exception("could not leave room %s", room)
+        await _end(app, socket, workers)
+
+
+async def _end(app: App, socket: Socket, workers: list[asyncio.Task[None]]) -> None:
+    """Stop the socket's tasks, leave its rooms and run ``disconnect()``, whatever went wrong before."""
+    socket._closing = True
+    for worker in workers:
+        worker.cancel()  # first: they stop whatever happens below
+    session = socket.context.peek_session()
+    if session is not None:
+        session.listeners.discard(socket)
+    for room in list(socket.rooms):
         try:
-            await socket.disconnect()
+            await app.rooms.leave(room, socket)
         except Exception:
-            log.exception("error in %s.disconnect", cls.__name__)
-        await cancel_and_wait(workers)
+            log.exception("could not leave room %s", room)
+    try:
+        await socket.disconnect()
+    except Exception:
+        log.exception("error in %s.disconnect", type(socket).__name__)
+    await cancel_and_wait(workers)
 
 
 def socket_endpoint(app: App, cls: type[Socket]) -> Any:

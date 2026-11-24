@@ -7,8 +7,23 @@ import httpx
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from rational import App, Button, Column, Component, FieldError, Forbidden, NotFound, Page, State, Text, redirect
+from rational import (
+    App,
+    Button,
+    Column,
+    Component,
+    FieldError,
+    Forbidden,
+    Limits,
+    NotFound,
+    Page,
+    State,
+    Text,
+    redirect,
+)
 from rational.backend import Service, remote
+from rational.context import Context
+from rational.session import hashed_id
 from rational.testing import TestClient
 
 
@@ -31,7 +46,7 @@ class Counter(Component):
 
 @pytest.fixture
 def app():
-    app = App(event_burst=5, event_rate=0.001)
+    app = App(limits=Limits(event_burst=5, event_rate=0.001))
 
     @app.page("/")
     class Home(Page):
@@ -351,8 +366,8 @@ def test_manifest_cannot_break_out_of_script():
     assert "</script>" not in json_for_script({"x": "</script><script>alert(1)</script>"})
 
 
-def test_expired_pages_are_evicted():
-    app = App(max_pages=2)
+def test_a_session_holds_a_bounded_number_of_pages():
+    app = App(limits=Limits(pages_per_session=2))
 
     @app.page("/")
     class Home(Page):
@@ -549,8 +564,8 @@ def test_a_failed_request_rotates_before_anything_is_stored(store):
     assert new_id != old_id and app.sessions.get(old_id) is None
     if store is not None:
         records = store.driver._items
-        assert f"rational:session:{old_id}" not in records  # the login was never stored under the old id
-        assert '"rw.user":"alice"' in records[f"rational:session:{new_id}"][1].decode()
+        assert f"rational:session:{hashed_id(old_id)}" not in records  # the login was never stored under the old id
+        assert '"rw.user":"alice"' in records[f"rational:session:{hashed_id(new_id)}"][1].decode()
 
 
 @pytest.mark.parametrize(
@@ -619,7 +634,7 @@ def test_bodies_over_the_limit_are_refused_before_reading_them():
         async def ping(self, text: str) -> dict:
             return {"text": text}
 
-    app = App(max_request_bytes=1024)
+    app = App(limits=Limits(max_request_bytes=1024))
     app.service(Echo)
     client = TestClient(app)
     assert client.http.post("/api/echo/ping", json={"text": "short"}).json() == {"text": "short"}
@@ -637,7 +652,7 @@ def test_bodies_over_the_limit_are_refused_before_reading_them():
 
 
 def test_oversized_events_are_refused_from_their_declared_length():
-    app = App(max_event_bytes=64)
+    app = App(limits=Limits(max_event_bytes=64))
 
     @app.page("/")
     class Home(Page):
@@ -788,3 +803,51 @@ def test_a_redirect_or_refusal_from_a_re_render_reaches_the_browser():
 def test_debug_mode_explains_a_failed_re_render():
     page = TestClient(flaky_app(debug=True)).open("/")
     assert "render exploded" in page.click("crash", check=False)["error"]["message"]
+
+
+def _own_cookie_app():
+    """An app that signs people in with its own signed cookie, not the framework session (review #2)."""
+    app = App(secret_key="x" * 40)
+    deleted = []
+
+    @app.authenticate
+    def who(ctx: Context):
+        return ctx.cookies.get("me", signed=True)
+
+    @app.service
+    class Account(Service):
+        @remote(auth="required")
+        async def delete(self) -> dict:
+            deleted.append(self.user)
+            return {"deleted": True}
+
+    @app.service
+    class Public(Service):
+        @remote
+        async def ping(self) -> dict:
+            return {"pong": True}
+
+    client = TestClient(app)
+    client.http.cookies.set("me", app.signer("rational.cookie").sign("ada"))
+    return app, client, deleted
+
+
+def test_remote_calls_with_cookies_but_no_session_need_the_csrf_header():
+    app, client, deleted = _own_cookie_app()
+    assert client.http.get("/api/public/ping").status_code == 405  # sanity: the routes are POSTs
+
+    forged = client.http.post("/api/account/delete", json={})  # cookies, but no header
+    assert forged.status_code == 403 and forged.json()["error"]["code"] == "csrf"
+    assert deleted == []
+
+    headers = {"x-rw-csrf": "", "content-type": "text/plain"}
+    as_text = client.http.post("/api/account/delete", content=b"{}", headers=headers)
+    assert as_text.status_code in (415, 422) and deleted == []  # 422: newer FastAPI refuses it first
+
+    sent = client.http.post("/api/account/delete", json={}, headers={"x-rw-csrf": ""})  # what rational.call sends
+    assert sent.status_code == 200 and deleted == ["ada"]
+
+
+def test_remote_calls_without_cookies_need_no_csrf_header():
+    app, _, _ = _own_cookie_app()
+    assert TestClient(app).http.post("/api/public/ping", json={}).json() == {"pong": True}

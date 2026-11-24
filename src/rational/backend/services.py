@@ -20,7 +20,7 @@ from pydantic import create_model
 
 from ..concurrency import invoke
 from ..errors import RationalError, Unauthorized
-from ..http import csrf_ok, json_error
+from ..http import CSRF_HEADER, csrf_ok, json_error
 
 if TYPE_CHECKING:
     from ..app import App
@@ -103,6 +103,27 @@ def register_service(app: App, cls: type) -> None:
             _add_route(app, cls, name, fn, spec)
 
 
+def _refuse_cross_site(request: Request, session: Session | None) -> Response | None:
+    """An error if another site's page could have sent this call with the visitor's cookies.
+
+    With a framework session the CSRF token must match. Without one, a call that carries cookies (the
+    app signs people in with its own, say) must carry the ``X-RW-CSRF`` header anyway, even empty, or
+    an ``Authorization`` header: another site cannot add either without a CORS preflight, which these
+    routes never grant with credentials. A body must be JSON, which no plain form or ``no-cors``
+    request can send. A call without cookies (an API client with a bearer token) has nothing to forge.
+    """
+    if session is not None:
+        if not csrf_ok(request, session):
+            return json_error(403, "csrf", "Invalid CSRF token")
+    elif request.cookies and CSRF_HEADER not in request.headers and "authorization" not in request.headers:
+        return json_error(403, "csrf", "Missing CSRF header")
+    has_body = request.headers.get("content-length", "0") != "0" or "transfer-encoding" in request.headers
+    media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if has_body and media_type != "application/json" and not media_type.endswith("+json"):
+        return json_error(415, "unsupported_media_type", "Send the body as application/json")
+    return None
+
+
 def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], spec: RemoteSpec) -> None:
     hints = typing.get_type_hints(fn)
     params = list(inspect.signature(fn).parameters.values())[1:]
@@ -132,11 +153,10 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
         request: Request = kwargs.pop("request")
         response: Response = kwargs.pop("response")
         ctx = await app.context_for(request)
-        session = ctx.peek_session()
-        if spec.method != "GET" and session is not None and not csrf_ok(request, session):
-            response = json_error(403, "csrf", "Invalid CSRF token")
-            await app.finish(request, response, ctx)
-            return response
+        refusal = _refuse_cross_site(request, ctx.peek_session()) if spec.method != "GET" else None
+        if refusal is not None:
+            await app.finish(request, refusal, ctx)
+            return refusal
         if body_model is not None:
             body = kwargs.pop("body")
             kwargs = {field: getattr(body, field) for field in body_model.model_fields}
@@ -148,7 +168,7 @@ def _add_route(app: App, cls: type[Service], name: str, fn: Callable[..., Any], 
                 result = await invoke(
                     getattr(cls(ctx), name),
                     kwargs=kwargs,
-                    timeout=app.handler_timeout,
+                    timeout=app.limits.handler_timeout,
                     threads=app.sync_handlers == "thread",
                 )
             except RationalError as e:

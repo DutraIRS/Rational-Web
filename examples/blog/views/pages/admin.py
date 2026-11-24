@@ -20,6 +20,7 @@ from rational import (
     Style,
     js,
 )
+from rational.bots import limit
 
 import settings
 from models import LoginForm, PostIn, PostOut
@@ -34,8 +35,10 @@ router = Router()
 class Login(Page):
     title = f"Sign in · {settings.BLOG_TITLE}"
 
+    @limit("5/minute")  # password guessing: five tries a minute per IP address
     def sign_in(self, form: LoginForm):
-        if not hmac.compare_digest(form.password.encode(), settings.ADMIN_PASSWORD.encode()):  # constant time
+        expected = settings.ADMIN_PASSWORD or settings.DEV_PASSWORD  # the app only starts without one in --dev
+        if not hmac.compare_digest(form.password.encode(), expected.encode()):  # constant time
             raise FieldError("password", "Wrong password")
         self.context.session.login("admin")
         self.navigate("/admin")

@@ -14,6 +14,12 @@ from rational.backend import Service, remote
 from models import Follow, Like, Member, MemberOut, Post, PostView, ProfileView
 from settings import MAX_POST_LENGTH
 
+MAX_LIST = 100  # the most items any list call returns, whatever ``limit`` the caller asks for
+
+
+def _capped(limit: int) -> int:
+    return max(0, min(limit, MAX_LIST))
+
 
 class SocialService(Service):
     """Members, posts, likes and follows."""
@@ -27,14 +33,14 @@ class SocialService(Service):
             me = await self._me(db)
             followees = select(Follow.followee_id).where(Follow.follower_id == me.id)
             query = _posts().where(or_(Post.author_id == me.id, Post.author_id.in_(followees)))
-            return await self._views(db, list(await db.scalars(query.limit(min(limit, 100)))), me.id)
+            return await self._views(db, list(await db.scalars(query.limit(_capped(limit)))), me.id)
 
     @remote(method="GET")
     async def explore(self, limit: int = 50) -> list[PostView]:
         """Everyone's latest posts."""
         async with self.db.session() as db:
             me = await self._me(db, required=False)
-            posts = list(await db.scalars(_posts().limit(min(limit, 100))))
+            posts = list(await db.scalars(_posts().limit(_capped(limit))))
             return await self._views(db, posts, me.id if me else None)
 
     @remote(method="GET")
@@ -43,7 +49,7 @@ class SocialService(Service):
         async with self.db.session() as db:
             member = await self._member(db, handle)
             me = await self._me(db, required=False)
-            posts = list(await db.scalars(_posts().where(Post.author_id == member.id).limit(min(limit, 100))))
+            posts = list(await db.scalars(_posts().where(Post.author_id == member.id).limit(_capped(limit))))
             return await self._views(db, posts, me.id if me else None)
 
     @remote(method="GET")
@@ -67,7 +73,7 @@ class SocialService(Service):
             me = await self._me(db)
             followed = select(Follow.followee_id).where(Follow.follower_id == me.id)
             query = select(Member).where(Member.id != me.id, Member.id.not_in(followed)).order_by(Member.handle)
-            return [MemberOut.model_validate(m) for m in await db.scalars(query.limit(limit))]
+            return [MemberOut.model_validate(m) for m in await db.scalars(query.limit(_capped(limit)))]
 
     # -- writing ---------------------------------------------------------------------------------
 

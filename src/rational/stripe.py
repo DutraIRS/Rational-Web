@@ -2,12 +2,14 @@
 
 ::
 
-    stripe = Stripe(app, secret_key=STRIPE_SECRET_KEY, webhook_secret=STRIPE_WEBHOOK_SECRET)
+    stripe = Stripe(app, secret_key=STRIPE_SECRET_KEY, webhook_secret=STRIPE_WEBHOOK_SECRET,
+                    base_url="https://shop.example")
 
     @app.page("/upgrade")
     class Upgrade(Page):
         def render(self):
             return ButtonLink("Upgrade", href=stripe.checkout_url(
+                self.context,                     # only this visitor's browser can use the link
                 line_items=[{"price": "price_123", "quantity": 1}],
                 mode="payment",
                 success_url="/done",
@@ -20,9 +22,15 @@
             ...
 
 ``checkout_url`` signs the parameters into a link; clicking it creates the Checkout Session on
-Stripe and redirects the browser there, so no API call happens while rendering. Webhook calls are
-verified against the ``Stripe-Signature`` header (timestamp plus HMAC of the exact body) before
-any handler runs, and replayed or forged calls are rejected.
+Stripe and redirects the browser there, so no API call happens while rendering. Given the page's
+context, the link works only in this visitor's browser session; it expires after ``link_ttl``
+seconds (an hour) either way. To create the session from a ``POST`` instead, call
+:meth:`Stripe.checkout` in an event handler and ``raise redirect(session["url"])``.
+
+Webhook calls are verified against the ``Stripe-Signature`` header (timestamp plus HMAC of the
+exact body) before any handler runs, so forged calls and calls older than ``tolerance`` (five
+minutes) are rejected. A call replayed within those five minutes is not, and Stripe itself may send
+an event more than once: make handlers idempotent (record ``event["id"]``).
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from .security import InvalidToken, Signer, same_text
 
 if TYPE_CHECKING:
     from .app import App
+    from .context import Context
 
 _API = "https://api.stripe.com"
 _URL_PARAMS = ("success_url", "cancel_url", "return_url")
@@ -69,8 +78,9 @@ class Stripe:
     """Adds ``{path}/checkout`` and ``{path}/webhook`` routes to ``app``; talks to the REST API.
 
     ``base_url`` is the site's public address, which site paths given as ``success_url``,
-    ``cancel_url`` or ``return_url`` are made absolute with. Without it, ``checkout_url`` uses the
-    address of the request, and ``checkout`` and ``portal`` need absolute URLs.
+    ``cancel_url`` or ``return_url`` are made absolute with. Without it those must be absolute URLs,
+    except in ``--dev``, where a checkout link uses the address of the request. (Not in production:
+    anyone can send a request with another ``Host`` header and pass on the Stripe page it leads to.)
     """
 
     def __init__(
@@ -83,8 +93,10 @@ class Stripe:
         tolerance: float = 300.0,
         api_url: str = _API,
         base_url: str = "",
+        link_ttl: float = 60 * 60,
     ) -> None:
         self.app = app
+        self.link_ttl = link_ttl
         self.base_url = base_url.rstrip("/")
         self.secret_key = secret_key
         self.webhook_secret = webhook_secret
@@ -104,13 +116,27 @@ class Stripe:
         self.handlers.append(fn)
         return fn
 
-    def checkout_url(self, **params: Any) -> str:
+    def checkout_url(self, context: Context | None = None, /, **params: Any) -> str:
         """A signed ``href``: clicking it creates the Checkout Session and redirects to Stripe.
 
-        ``success_url``/``cancel_url`` may be site paths. ``{CHECKOUT_SESSION_ID}`` in
-        ``success_url`` works as in Stripe's API.
+        Pass the page's ``self.context`` to bind the link to this visitor's session, so that it
+        does not work for anyone who finds it in a log or a shared screenshot; a link that names a
+        ``customer`` must be bound. Links expire after ``link_ttl`` seconds. ``success_url`` and
+        ``cancel_url`` may be site paths with ``Stripe(base_url=...)``; ``{CHECKOUT_SESSION_ID}``
+        in ``success_url`` works as in Stripe's API.
         """
-        return f"{self.path}/checkout?c={self._signer.sign(params)}"
+        if context is None and "customer" in params:
+            raise TypeError(
+                "a checkout link that names a customer would work for anyone holding it: "
+                "pass the page's context first, stripe.checkout_url(self.context, customer=...)"
+            )
+        if not self.base_url and not self.app.debug and any(_site_path(params.get(k)) for k in _URL_PARAMS):
+            raise ValueError(
+                "site paths in a checkout link need Stripe(base_url=...), the site's public address: "
+                "a request's Host header can be forged"
+            )
+        bound = _session_tag(context.session.id) if context is not None else None
+        return f"{self.path}/checkout?c={self._signer.sign({'p': params, 's': bound})}"
 
     async def checkout(self, **params: Any) -> dict[str, Any]:
         """Create a Checkout Session directly (in an event handler, say); returns Stripe's answer."""
@@ -136,12 +162,20 @@ class Stripe:
     async def _checkout(self, request: Request) -> Response:
         from .pages import error_page
 
+        if _speculative(request):  # a prefetch, or an <img> on another site: not someone who clicked
+            return Response(status_code=503, headers={"Cache-Control": "no-store"})
         try:
-            params = dict(self._signer.unsign(str(request.query_params.get("c", "")), max_age=24 * 60 * 60))
-        except (InvalidToken, TypeError, ValueError):
-            return error_page(self.app, request, 404, "This checkout link is not valid")
+            signed = self._signer.unsign(str(request.query_params.get("c", "")), max_age=self.link_ttl)
+            params, bound = dict(signed["p"]), signed["s"]
+        except (InvalidToken, TypeError, ValueError, KeyError):
+            return error_page(self.app, request, 404, "This checkout link is not valid or has expired")
+        if bound is not None:
+            visitor = await self.app.load_session(request)
+            if visitor is None or not same_text(_session_tag(visitor.id), str(bound)):
+                return error_page(self.app, request, 403, "This checkout link was made for another visitor")
+        origin = str(request.base_url).rstrip("/") if self.app.debug else ""
         try:
-            session = await self.checkout(**self._absolute(params, str(request.base_url).rstrip("/")))
+            session = await self.checkout(**self._absolute(params, origin))
             return RedirectResponse(str(session["url"]), status_code=303)
         except (StripeError, KeyError, TypeError, ValueError):
             log.exception("could not create a Stripe Checkout Session")
@@ -203,6 +237,22 @@ class Stripe:
             with contextlib.suppress(ValueError, KeyError, TypeError):
                 message = json.loads(e.body)["error"]["message"]
             raise StripeError(e.status, str(message)) from e
+
+
+def _site_path(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("/")
+
+
+def _session_tag(session_id: str) -> str:
+    """What a bound link carries: signed values can be read, so not the session id itself."""
+    return hashlib.sha256(f"rational.stripe:{session_id}".encode()).hexdigest()[:32]
+
+
+def _speculative(request: Request) -> bool:
+    """A request no person asked for: a prefetch or prerender, or a fetch for something other than a page."""
+    purpose = (request.headers.get("sec-purpose", "") + request.headers.get("purpose", "")).lower()
+    dest = request.headers.get("sec-fetch-dest")
+    return "prefetch" in purpose or "prerender" in purpose or (dest is not None and dest != "document")
 
 
 def _stripe_form(params: dict[str, Any], prefix: str = "") -> dict[str, str]:

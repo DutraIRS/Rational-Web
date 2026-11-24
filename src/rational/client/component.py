@@ -66,7 +66,7 @@ class ClientComponent(Component):
             result = await invoke(
                 getattr(service(context), method.__name__),
                 kwargs=args,
-                timeout=app.handler_timeout if app is not None else None,
+                timeout=app.limits.handler_timeout if app is not None else None,
                 threads=app is not None and app.sync_handlers == "thread",
             )
         except RemoteError:

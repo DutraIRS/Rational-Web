@@ -4,7 +4,7 @@ import pytest
 
 from rational import App
 from rational.backend import Service, remote
-from rational.session import Session, TTLStore
+from rational.session import Session, TTLStore, hashed_id
 from rational.stores import (
     MemorySessionDriver,
     PersistentSessionStore,
@@ -83,7 +83,7 @@ def test_changes_on_one_worker_reach_a_warm_cache_on_another():
 def driver_csrf(driver, sid):
     import json
 
-    return json.loads(driver._items[f"rational:session:{sid}"][1])["csrf"]
+    return json.loads(driver._items[f"rational:session:{hashed_id(sid)}"][1])["csrf"]
 
 
 def test_login_rotation_removes_the_old_record():
@@ -96,7 +96,7 @@ def test_login_rotation_removes_the_old_record():
     new = sid_of(response)
 
     assert new != first and len(driver) == 1
-    assert f"rational:session:{first}" not in driver._items
+    assert f"rational:session:{hashed_id(first)}" not in driver._items
     assert call(a, "whoami", first).json()["user"] is None
 
 
@@ -117,7 +117,7 @@ def test_unreadable_records_are_discarded():
 
     driver = MemorySessionDriver()
     store = PersistentSessionStore(driver)
-    asyncio.run(driver.set("rational:session:bad", b"\xff not json", 60))
+    asyncio.run(driver.set("rational:session:" + hashed_id("bad"), b"\xff not json", 60))
     assert asyncio.run(store.load("bad")) is None
 
 
@@ -243,7 +243,7 @@ async def two_workers(**data):
 def stored(driver, session):
     import json
 
-    return json.loads(driver._items[f"rational:session:{session.id}"][1])
+    return json.loads(driver._items[f"rational:session:{hashed_id(session.id)}"][1])
 
 
 async def test_concurrent_changes_to_different_keys_are_both_kept():
@@ -291,7 +291,7 @@ async def test_loading_merges_newer_data_without_losing_unsaved_changes():
 
 async def test_a_stale_read_never_rolls_a_session_back():
     driver, _, b, sa, sb = await two_workers(x=0)
-    old = driver._items[f"rational:session:{sa.id}"][1]
+    old = driver._items[f"rational:session:{hashed_id(sa.id)}"][1]
     sb["x"] = 1
     await b.save(sb)
 
@@ -318,7 +318,7 @@ async def test_a_load_waiting_for_a_logout_does_not_revive_the_old_id():
     driver, a, _, sa, _ = await two_workers(x=0)
     old_id = sa.id
     newer = b'{"n":9,"csrf":"c","data":{"x":2},"state":{}}'  # written by another worker meanwhile
-    await driver.set(f"rational:session:{old_id}", newer, 60)
+    await driver.set(f"rational:session:{hashed_id(old_id)}", newer, 60)
 
     async with sa.lock:  # a request on this worker holds the session and logs out
         loading = asyncio.ensure_future(a.load(old_id))
@@ -328,7 +328,7 @@ async def test_a_load_waiting_for_a_logout_does_not_revive_the_old_id():
         await a.save(sa)
 
     assert await loading is None
-    assert a.get(old_id) is None and await driver.get(f"rational:session:{old_id}") is None
+    assert a.get(old_id) is None and await driver.get(f"rational:session:{hashed_id(old_id)}") is None
 
 
 async def test_unchanged_sessions_renew_their_expiry_at_most_every_quarter_ttl():
@@ -383,7 +383,7 @@ async def test_conflicting_writes_do_not_diverge():
     await a.save(sa)
     await b.save(sb)  # must adopt A's version, not silently keep its own view
 
-    raw = await driver.get("rational:session:" + sb.id)
+    raw = await driver.get("rational:session:" + hashed_id(sb.id))
     payload = json.loads(raw)
     assert payload["data"]["x"] == "B"  # both changed x: the last writer wins
 
@@ -392,7 +392,7 @@ async def test_conflicting_writes_do_not_diverge():
     again["y"] = 1
     await a.save(again)  # worker A must not keep a stale same-version view
 
-    raw2 = await driver.get("rational:session:" + sb.id)
+    raw2 = await driver.get("rational:session:" + hashed_id(sb.id))
     assert json.loads(raw2)["data"] == {"x": "B", "y": 1}
 
 
@@ -412,12 +412,12 @@ async def test_logout_cannot_be_resurrected_by_a_stale_worker():
     sa.logout()
     await a.rotate(sa)
     await a.save(sa)
-    assert await driver.get("rational:session:" + sid) is None
+    assert await driver.get("rational:session:" + hashed_id(sid)) is None
 
     # Worker B, holding an in-flight change from before the logout, saves afterwards.
     sb["note"] = "late"
     await b.save(sb)
-    assert await driver.get("rational:session:" + sid) is None  # still gone: no resurrection
+    assert await driver.get("rational:session:" + hashed_id(sid)) is None  # still gone: no resurrection
     assert b.get(sid) is None
 
 
@@ -429,9 +429,9 @@ async def test_rotation_deletes_the_old_record_and_the_save_writes_the_new_one()
     await store.save(session)
     old = session.id
     await store.rotate(session)
-    assert await driver.get("rational:session:" + old) is None
+    assert await driver.get("rational:session:" + hashed_id(old)) is None
     await store.save(session)
-    raw = await driver.get("rational:session:" + session.id)
+    raw = await driver.get("rational:session:" + hashed_id(session.id))
     assert raw is not None and json.loads(raw)["data"]["rw.user"] == "ada"
 
 
@@ -447,3 +447,23 @@ def test_sweeping_stops_at_the_first_page_still_alive(monkeypatch):
     assert store.sweep() == 1 and evicted == ["old"] and len(store) == 1
     store.clear()
     assert evicted == ["old", "young"] and len(store) == 0
+
+
+def test_stores_and_snapshots_hold_no_session_id():
+    """Whoever reads the store (a backup, a shared Redis) must not get live session tokens (review #4)."""
+    from rational import Button, Page
+
+    driver = MemorySessionDriver()
+    app = App(page_snapshots=driver, session_store=PersistentSessionStore(driver))
+
+    @app.page("/")
+    class Home(Page):
+        def render(self):
+            self.context.session["seen"] = True
+            return Button("Go", on_click=lambda: None)
+
+    client = TestClient(app)
+    client.open("/").click("Go")
+    sid = client.http.cookies["rw_sid"]
+    assert len(driver) == 2  # the session and the page snapshot
+    assert not any(sid in key or sid.encode() in value for key, (_, value) in driver._items.items())

@@ -315,7 +315,8 @@ class Jobs:
                 if not self._store_down:  # once per outage: workers retry many times a minute
                     self._store_down = True
                     log.exception("could not run jobs; trying again until it works")
-            assert self._wake is not None
+            if self._wake is None:
+                raise RuntimeError("the job worker was not started")
             self._wake.clear()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), self.poll)

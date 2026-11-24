@@ -71,7 +71,7 @@ Python 3.14.7, Windows 11, Intel Core (Tiger Lake), single process.
      - 8.8 KiB
    * - ``islands.js`` (pages with client components only)
      - 35.1 KiB
-     - 10.4 KiB
+     - 10.5 KiB
    * - Theme CSS (immutable, cached)
      - 5.5 KiB
      - 1.6 KiB

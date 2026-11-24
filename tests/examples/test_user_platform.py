@@ -92,3 +92,20 @@ def test_swagger_ui_carries_the_csrf_token(platform):
         assert '"csrf":""' not in signed_in and "X-RW-CSRF" in signed_in
         tags = {t["name"] for t in client.http.get("/api/openapi.json").json()["tags"]}
         assert tags == {"account", "admin"}
+
+
+def test_only_one_of_two_simultaneous_first_sign_ups_becomes_admin(platform):
+    import asyncio
+
+    from rational.context import Context
+
+    async def race():
+        await platform.create_tables()
+        register = platform.AccountService(Context(platform.app)).register
+        return await asyncio.gather(
+            register("Ada", "ada@example.com", "correct horse"),
+            register("Grace", "grace@example.com", "correct horse"),
+        )
+
+    users = asyncio.run(race())
+    assert sorted(u.role for u in users) == ["admin", "member"]

@@ -20,7 +20,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, NamedTuple, Protocol
 
-from .session import Session, SessionStore
+from .limits import NEW_VISITOR_TTL
+from .session import Session, SessionStore, hashed_id
 from .state import values_equal
 
 log = logging.getLogger("rational.session")
@@ -328,7 +329,8 @@ class PersistentSessionStore(SessionStore):
     from the driver (one round trip), so a change made on another worker is seen, and a logout
     elsewhere ends the session here too. A session is written once when the request finishes, and
     only if it changed. Match ``ttl`` to ``App(session_ttl=...)`` so the cookie and the record
-    expire together.
+    expire together. A first-time visitor's record is kept for an hour (``NEW_VISITOR_TTL``) until the
+    browser comes back with the cookie, so anonymous requests cannot fill the store for a whole day.
     """
 
     def __init__(
@@ -350,7 +352,7 @@ class PersistentSessionStore(SessionStore):
         self.on_saved: Callable[[Session], Awaitable[None]] | None = None  # set by App(bus=...)
 
     def _key(self, sid: str) -> str:
-        return self.prefix + sid
+        return self.prefix + hashed_id(sid)  # a copy of the store (a backup, say) holds no usable session ids
 
     async def load(self, sid: str | None) -> Session | None:
         if not sid:
@@ -362,13 +364,16 @@ class PersistentSessionStore(SessionStore):
         if raw is None:
             if cached.synced is None:
                 return cached  # created here and not written yet
-            self._store.pop(sid)  # ended elsewhere (a logout) or expired
+            self._drop(sid)  # ended elsewhere (a logout) or expired
             return None
         if raw != cached.synced:
             async with cached.lock:  # never change a session under a running handler
                 if cached.id != sid or not self._adopt(cached, raw):  # rotated meanwhile, or unreadable
-                    self._store.pop(sid)
+                    self._drop(sid)
                     return None
+        if cached.fresh:
+            self._promote(cached)
+            cached.touched_at = None  # the next save renews the record for the whole TTL
         return cached
 
     def _load_new(self, sid: str, raw: bytes) -> Session | None:
@@ -392,7 +397,7 @@ class PersistentSessionStore(SessionStore):
     async def save(self, session: Session) -> None:
         if session.saved_revision == session.revision:
             if session.touched_at is None or time.monotonic() - session.touched_at > self.ttl / 4:
-                await self.driver.touch(self._key(session.id), self.ttl)  # reads keep a session alive too
+                await self.driver.touch(self._key(session.id), self._ttl(session))  # reads keep a session alive too
                 session.touched_at = time.monotonic()
             return
         for _ in range(MAX_CONFLICTS):
@@ -402,7 +407,7 @@ class PersistentSessionStore(SessionStore):
                 return
             raw = await self.driver.get(self._key(session.id))
             if raw is None or not self._adopt(session, raw):
-                self._store.pop(session.id)  # ended elsewhere: never write it back
+                self._drop(session.id)  # ended elsewhere: never write it back
                 return
         log.warning("a session changed on other workers %d times while saving; will retry next time", MAX_CONFLICTS)
 
@@ -416,11 +421,15 @@ class PersistentSessionStore(SessionStore):
                 "state": {k: v for k, v in session.state.items() if json_plain(v)},
             }
         )
-        if not await self.driver.cas(self._key(session.id), session.synced, raw, self.ttl):
+        if not await self.driver.cas(self._key(session.id), session.synced, raw, self._ttl(session)):
             return False
         session.synced, session.version = raw, session.version + 1
         session.saved_revision, session.touched_at = session.revision, time.monotonic()
         return True
+
+    def _ttl(self, session: Session) -> int:
+        """How long the record lives: an hour for a first-time visitor, until the browser comes back."""
+        return min(self.ttl, NEW_VISITOR_TTL) if session.fresh else self.ttl
 
     def _adopt(self, session: Session, raw: bytes) -> bool:
         """Merge the stored record ``raw`` into ``session``, keeping changes not written yet.

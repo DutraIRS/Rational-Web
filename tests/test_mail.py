@@ -243,3 +243,10 @@ async def test_http_helper_reports_nonsense_and_huge_answers(local_server, monke
     monkeypatch.setattr(_http, "MAX_ANSWER_BYTES", 4)
     with pytest.raises(_http.HTTPError, match="too large"):
         await _http.request("POST", local_server + "/", json_body={})
+
+
+def test_smtp_refuses_a_password_without_encryption_except_on_this_machine():
+    with pytest.raises(ValueError, match="clear text"):
+        SMTP("smtp.example.com", username="ada", password="pw", security="none")
+    SMTP("localhost", username="ada", password="pw", security="none")  # a local relay: nothing crosses the network
+    SMTP("smtp.example.com", security="none")  # no credentials to leak

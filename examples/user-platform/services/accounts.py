@@ -1,10 +1,28 @@
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from rational import FieldError
 from rational.backend import Service, remote
 from rational.security import ahash_password, averify_password
 
-from models import User, UserOut
+from models import FirstAccount, User, UserOut
+
+
+async def _claim_first_account(db: AsyncSession, user_id: int) -> bool:
+    """True for the first account only, even when two are created at the same moment.
+
+    Counting users and then inserting is not enough: two sign-ups on an empty database would both count
+    zero. Only one insert of the ``first_account`` row can succeed; the other fails on its primary key.
+    """
+    if await db.scalar(select(func.count(User.id))) != 1:  # other accounts exist: an older database
+        return False
+    try:
+        async with db.begin_nested():  # a savepoint: losing the race leaves the sign-up itself intact
+            db.add(FirstAccount(id=1, user_id=user_id))
+    except IntegrityError:
+        return False
+    return True
 
 
 class AccountService(Service):
@@ -16,15 +34,11 @@ class AccountService(Service):
         async with self.db.transaction() as db:
             if await db.scalar(select(User.id).where(User.email == email)) is not None:
                 raise FieldError("email", "An account with this email already exists")
-            first_user = await db.scalar(select(func.count(User.id))) == 0
-            user = User(
-                name=name.strip(),
-                email=email,
-                password_hash=password_hash,
-                role="admin" if first_user else "member",
-            )
+            user = User(name=name.strip(), email=email, password_hash=password_hash, role="member")
             db.add(user)
             await db.flush()
+            if await _claim_first_account(db, user.id):
+                user.role = "admin"
             return UserOut.model_validate(user)
 
     async def authenticate(self, email: str, password: str) -> UserOut:

@@ -4,7 +4,8 @@ from rational.testing import TestClient
 
 
 @pytest.fixture
-def blog(example):
+def blog(example, monkeypatch):
+    monkeypatch.setenv("BLOG_PASSWORD", "rational")
     return example("blog")
 
 
@@ -77,3 +78,17 @@ def test_feed_and_public_api(blog):
         assert client.http.get("/api/blog/get-post", params={"slug": "an-unfinished-draft"}).status_code == 404
         response = client.http.post("/api/blog/save-post", json={"post": {"title": "Hack"}})
         assert response.status_code == 401  # writing needs the admin session
+
+
+def test_the_blog_refuses_to_start_in_production_without_a_password(example, monkeypatch):
+    monkeypatch.delenv("BLOG_PASSWORD", raising=False)
+    blog = example("blog")
+    with pytest.raises(RuntimeError, match="BLOG_PASSWORD"), TestClient(blog.app):
+        pass
+
+
+def test_admin_sign_in_is_rate_limited(blog):
+    with TestClient(blog.app) as client:
+        login = client.open("/login")
+        codes = [login.submit({"password": "guess"}, check=False)["error"]["code"] for _ in range(6)]
+        assert codes == ["validation_error"] * 5 + ["rate_limited"]

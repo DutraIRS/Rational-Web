@@ -89,28 +89,30 @@ def _control(
     widget = extra.get("widget") if isinstance(extra, dict) else None
     if annotation is str and (widget == "textarea" or (max_length and max_length > LONG_TEXT)):
         return Textarea(label, value=value, required=required, maxlength=max_length, **common)
-    attrs: dict[str, Any] = {}
-    lowered = name.lower()
-    if annotation in (int, float):
-        input_type = "number"
-        attrs["min"] = _constraint(info, "ge", "gt")
-        attrs["max"] = _constraint(info, "le", "lt")
-        if annotation is float:
-            attrs["step"] = "any"
-    elif widget in ("password", "email", "url", "tel", "date", "time", "search"):
-        input_type = str(widget)
-    elif "password" in lowered:
-        input_type, attrs["autocomplete"] = "password", "current-password"
-    elif "email" in lowered:
-        input_type, attrs["autocomplete"] = "email", "email"
-    else:
-        input_type = "text"
+    input_type, attrs = _input_type(name, annotation, info, widget)
     if annotation is str:
         attrs["minlength"] = _constraint(info, "min_length")
         attrs["maxlength"] = max_length
     if input_type == "password":
         value = None  # never echo a password back into the page
     return Input(label, value=value, type=input_type, required=required, **common, **attrs)
+
+
+def _input_type(name: str, annotation: Any, info: FieldInfo, widget: Any) -> tuple[str, dict[str, Any]]:
+    """The ``<input type>`` for a field, and the attributes that come with it."""
+    if annotation in (int, float):
+        attrs = {"min": _constraint(info, "ge", "gt"), "max": _constraint(info, "le", "lt")}
+        if annotation is float:
+            attrs["step"] = "any"
+        return "number", attrs
+    if widget in ("password", "email", "url", "tel", "date", "time", "search"):
+        return str(widget), {}
+    lowered = name.lower()
+    if "password" in lowered:
+        return "password", {"autocomplete": "current-password"}
+    if "email" in lowered:
+        return "email", {"autocomplete": "email"}
+    return "text", {}
 
 
 def ModelForm(  # noqa: N802

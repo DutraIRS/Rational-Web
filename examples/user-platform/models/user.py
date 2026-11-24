@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import String
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -21,6 +21,16 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(10), default="member")
     password_hash: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class FirstAccount(Base):
+    """One row at most: whoever inserts it is the administrator. The primary key lets only one insert
+    succeed, however many accounts are created at the same moment."""
+
+    __tablename__ = "first_account"
+
+    id: Mapped[int] = mapped_column(primary_key=True)  # always 1
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
 class UserOut(BaseModel):

@@ -6,6 +6,65 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1a1] - 2026-11-24
+
+The fixes from the code review of 24 November 2026.
+
+### Security
+- A flood of anonymous requests no longer pushes out the visitors who use the site (a burst of 5,000
+  cookie-less requests expired every live page; 100,000 signed everyone out). A first-time visitor's
+  page views and session wait in a separate, smaller pool until the browser comes back with the session
+  cookie; one session holds at most 16 page views (its own oldest goes first); one IP address opens at
+  most 60 interactive page views a minute without a cookie (429 past that); and with a persistent
+  session store or page snapshots, a first-time visitor's records are kept for an hour, not a day.
+- The event rate limit counts per browser session, not per page view, so opening new page views no
+  longer refills it.
+- `@remote` calls other than `GET` from a request that carries cookies but has no framework session
+  (an app that signs people in with its own cookie) must carry the `X-RW-CSRF` header, which another
+  site cannot add without a preflight; `rational.call` and the Swagger page always send it. Bodies must
+  be JSON (415 otherwise), whatever the FastAPI version. On FastAPI 0.110, another site could call an
+  `auth="required"` method with the visitor's cookie.
+- Stripe checkout links: `stripe.checkout_url(self.context, ...)` binds a link to the visitor's session,
+  and a link that names a `customer` must be bound. Links expire after an hour (`link_ttl`, was 24
+  hours), and prefetches and `<img>` requests are refused, so only a click creates a Checkout Session.
+  Site paths need `Stripe(base_url=...)` outside `--dev`: the request's `Host` header no longer decides
+  where Stripe sends the customer back.
+- Persistent session stores key records by a SHA-256 of the session id, and page snapshots hold that
+  hash, so a copy of the store holds no usable session tokens. Existing records are not found after
+  upgrading: everyone signs in again, and open pages reload.
+- `SMTP(security="none")` refuses a `username` unless the server is on this machine: the password
+  would cross the network in clear text.
+- Session changes announced to other workers over the bus (`App(bus=...)`) carry a hash of the session
+  id, not the id itself, so a subscriber to a shared Redis learns no session tokens.
+- OpenID Connect discovery checks that the document names the configured issuer.
+- The release workflow pins its actions to commits; Dependabot keeps actions and dependencies up to
+  date, and CI runs pip-audit.
+
+### Changed
+- **Breaking:** limits moved into `App(limits=Limits(...))`: `page_ttl`, `max_pages`, `event_burst`,
+  `event_rate`, `max_event_bytes`, `max_request_bytes` and `handler_timeout` are no longer `App`
+  arguments. New: `max_new_pages`, `pages_per_session` and `new_visitor_pages`.
+- `Stripe.checkout_url` takes the page's context as an optional first argument.
+- Examples: the blog refuses to start in production without `BLOG_PASSWORD` (the `rational` password
+  works with `--dev` only), sign-in handlers have `@limit`, every social-network list call shares one
+  cap (`suggestions` had none), and only one of two simultaneous first sign-ups on the user platform
+  becomes administrator.
+- Runtime invariants raise exceptions instead of using `assert`, which `python -O` removes.
+- No function is more complex than ruff's C901 limit of 10 any more (16 were), and CI keeps it so: the
+  event, stream and WebSocket handlers, page serving, the static export, the style property table and
+  others are split into named steps.
+- The client compiler is a package of modules by concern (`rational.client.compiler.statements`,
+  `.expressions`, `.calls`, `.markup`...) instead of one 1,500-line file, and compiles statements and
+  expressions through a table of node kinds; imports from `rational.client.compiler` are unchanged, and the
+  JavaScript it writes is byte-for-byte the same.
+
+### Fixed
+- A style value that is not a `str` (an enum, say) is checked for unsafe characters when it is
+  compiled, also for properties with a list of known keywords.
+- Docs that said more than the code does: the OAuth `nonce` (checked for Apple only), Stripe webhook
+  replays within the five-minute window, "about the same time" for account emails, the CSP (same-origin
+  scripts and nonced styles), and the size of `islands.js` on pages with client components.
+
 ## [0.5.0a1] - 2026-11-23
 
 Everything run on Linux (Debian 13) and Windows 11, with what that turned up fixed: clean shutdown
