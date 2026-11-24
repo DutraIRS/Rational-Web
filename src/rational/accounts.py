@@ -23,8 +23,9 @@ your pages and services::
 
 Links are signed with the app's secret key and expire. A reset link is tied to the current password,
 so it works once; a verification link is tied to the address; a sign-in link works once. The
-``send_*`` methods answer the same whether or not an account exists, and in the same time: they
-never wait for a mail server. They send at most one message per address and purpose every
+``send_*`` methods answer the same whether or not an account exists, and in about the same time:
+they never wait for a mail server (for an existing account they also render the message and sign a
+token, which takes a little longer). They send at most one message per address and purpose every
 ``resend_after`` seconds.
 
 Mail scanners open links to check them, so a page at a sign-in link should ask for a click before

@@ -41,6 +41,30 @@ async def test_session_change_on_one_worker_updates_a_page_on_another():
     await stream.close()
 
 
+async def test_bus_messages_carry_no_usable_session_id():
+    """Anyone subscribed to a shared Redis must not learn live session tokens (review 2026-11-24, #4)."""
+    driver, bus = MemorySessionDriver(), MemoryBus()
+    heard = []
+    await bus.subscribe("rational:sessions", heard.append)
+    a, b = worker(driver, bus), worker(driver, bus)
+
+    one = Raw(a)
+    m1, html1 = await one.open_page()
+    two = Raw(b)
+    two.cookie = one.cookie
+    m2, _html2 = await two.open_page()
+    stream = two.stream(m2)
+    assert await stream.next() == {"hello": 0}
+    await asyncio.sleep(0.05)
+
+    await one.event(m1, handler_of(html1))
+    await stream.until("Items: 1", timeout=3)  # the other worker still hears about it
+    await stream.close()
+
+    sid = one.cookie.split("=", 1)[1]
+    assert heard and not any(sid in message for message in heard)
+
+
 async def test_without_a_bus_the_other_worker_is_not_told():
     driver = MemorySessionDriver()
     a = make_app(live_session=True, session_store=PersistentSessionStore(driver))

@@ -7,6 +7,8 @@ sessions in process memory; :mod:`rational.stores` persists them for several wor
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import math
 import secrets
 import time
 import weakref
@@ -15,10 +17,16 @@ from collections.abc import Callable, Iterator, MutableMapping
 from typing import Any, Generic, Protocol, TypeVar
 
 from ._tracking import track_read
+from .limits import NEW_VISITOR_TTL
 
 USER_KEY = "rw.user"
 
 V = TypeVar("V")
+
+
+def hashed_id(sid: str) -> str:
+    """What stores and snapshots keep instead of a session id: whoever reads them gets no live token."""
+    return hashlib.sha256(sid.encode()).hexdigest()
 
 
 class Session(MutableMapping[str, Any]):
@@ -40,6 +48,11 @@ class Session(MutableMapping[str, Any]):
         self.touched_at: float | None = None
         # Page runtimes and sockets that want to hear about changes; weak, so they can expire.
         self.listeners: weakref.WeakSet[Any] = weakref.WeakSet()
+        # A first-time visitor's session, until the browser comes back with the cookie (see rational.limits).
+        self.fresh = False
+        self.pages: OrderedDict[str, None] = OrderedDict()  # ids of its page views this process holds, oldest first
+        self.event_tokens = math.inf  # the event rate limit's bucket, shared by the session's page views
+        self.event_stamp = time.monotonic()
 
     def __getitem__(self, key: str) -> Any:
         track_read(("s", key))
@@ -79,6 +92,16 @@ class Session(MutableMapping[str, Any]):
         self.bump()
         self.rotated = True
 
+    def allow_event(self, burst: int, per_second: float) -> bool:
+        """Take one event from the bucket: ``burst`` at once, refilled at ``per_second``."""
+        now = time.monotonic()
+        self.event_tokens = min(burst, self.event_tokens + (now - self.event_stamp) * per_second)
+        self.event_stamp = now
+        if self.event_tokens < 1:
+            return False
+        self.event_tokens -= 1
+        return True
+
 
 class TTLStore(Generic[V]):
     """LRU map with idle expiry."""
@@ -111,8 +134,13 @@ class TTLStore(Generic[V]):
             self._evict(next(iter(self._items)))
 
     def pop(self, key: str) -> V | None:
+        """Remove ``key`` without calling ``on_evict``."""
         entry = self._items.pop(key, None)
         return None if entry is None else entry[1]
+
+    def discard(self, key: str) -> None:
+        """Remove ``key`` and call ``on_evict``, as expiry would."""
+        self._evict(key)
 
     def sweep(self) -> int:
         now = time.monotonic()
@@ -160,30 +188,52 @@ class SessionBackend(Protocol):
 
 
 class SessionStore:
-    """The default, in-process ``SessionBackend``."""
+    """The default, in-process ``SessionBackend``.
 
-    def __init__(self, ttl: float = 60 * 60 * 24, max_items: int = 100_000) -> None:
+    A new session waits in a smaller pool (``max_new``) until the browser comes back with its cookie,
+    so requests that never do (a flood of anonymous requests) cannot push out the sessions in use.
+    """
+
+    def __init__(self, ttl: float = 60 * 60 * 24, max_items: int = 100_000, max_new: int = 10_000) -> None:
         self._store: TTLStore[Session] = TTLStore(ttl, max_items)
+        self._new: TTLStore[Session] = TTLStore(min(ttl, NEW_VISITOR_TTL), max_new)
 
     def get(self, sid: str | None) -> Session | None:
-        return self._store.get(sid)
+        session = self._store.get(sid)
+        return session if session is not None else self._new.get(sid)  # an empty session is falsy
 
     async def load(self, sid: str | None) -> Session | None:
-        return self.get(sid)
+        session = self.get(sid)
+        if session is not None:
+            self._promote(session)
+        return session
 
     async def save(self, session: Session) -> None:
         return None
 
     def create(self) -> Session:
         session = Session(secrets.token_urlsafe(32))
-        self._store.put(session.id, session)
+        session.fresh = True
+        self._new.put(session.id, session)
         return session
 
     async def rotate(self, session: Session) -> None:
-        self._store.pop(session.id)
+        self._drop(session.id)
         session.id = secrets.token_urlsafe(32)
         session.csrf = secrets.token_urlsafe(24)
+        session.fresh = False  # a sign-in or sign-out: a visitor who uses the site
         self._store.put(session.id, session)
 
     def sweep(self) -> int:
-        return self._store.sweep()
+        return self._store.sweep() + self._new.sweep()
+
+    def _promote(self, session: Session) -> None:
+        """The browser came back with the cookie: keep the session in the main pool from now on."""
+        if session.fresh:
+            session.fresh = False
+            self._new.pop(session.id)
+            self._store.put(session.id, session)
+
+    def _drop(self, sid: str) -> None:
+        self._store.pop(sid)
+        self._new.pop(sid)

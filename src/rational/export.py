@@ -28,6 +28,7 @@ from starlette.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
     from .app import App
+    from .pages import PageRoute
 
 RUNTIME_PATH = b"/_rational/runtime.js"
 _MANIFEST = re.compile(rb'<script type="application/json" id="rw-manifest">(.*?)</script>', re.DOTALL)
@@ -56,60 +57,83 @@ async def export_site(
     root = Path(out)
     base = base_path.rstrip("/")
     report = ExportReport()
-    scripts = False
     was_debug, app.debug = app.debug, False
     was_nav, app.client_nav = app.client_nav, False  # an exported site has no runtime to navigate with
     try:
         async with app.fastapi.router.lifespan_context(app.fastapi):
+            scripts = False
             for route in app.routes.values():
-                name = route.page.__name__
-                if (route.auth or "") == "required":
-                    report.skipped.append((route.path, f"{name} requires sign-in"))
-                    continue
-                urls = route.urls()
-                if not urls:
-                    report.skipped.append((route.path, f"{name} has path parameters: list their values with paths="))
-                for url in urls:
-                    file = _page_file(url)
-                    status, body = await _get(app, url, _relative_base(file) if relative else base)
-                    if status != 200:
-                        report.skipped.append((url, f"{name} answered HTTP {status}"))
-                        continue
-                    if _needs_server(body):
-                        report.skipped.append((url, f"{name} has server events and needs a live server"))
-                        continue
-                    _write(root, file, body)
-                    report.pages.append(url)
-                    scripts = scripts or RUNTIME_PATH in body
-
-            for path in app.exported_files if report.pages else ():  # sitemap.xml, robots.txt, ...
-                status, body = await _get(app, path, base)
-                if status == 200:
-                    _write(root, path.lstrip("/"), body)
-                    report.assets.append(path)
-            if report.pages and app.theme_href:
-                _write(root, "_rational/theme.css", app.theme_css.encode())
-                report.assets.append("/_rational/theme.css")
-            own_404 = any(_page_file(url) == "404.html" for url in report.pages)  # the site's own 404 page wins
-            if report.pages and not_found and not own_404:
-                status, body = await _get(app, "/__rational_not_found__", base)
-                if status == 404 and b"<html" in body:
-                    _write(root, "404.html", body)
-            if scripts:  # pages with client components: the browser runtime and every compiled module
-                files = {"/_rational/runtime.js": app.runtime_js, "/_rational/islands.js": app.islands_js}
-                files.update({module.path: module.js for module in app.client_modules})
-                for path, text in files.items():
-                    _write(root, path.lstrip("/"), text.encode())
-                    report.assets.append(path)
-            for mount in app.fastapi.routes:
-                directory = _static_directory(mount)
-                if directory is not None and isinstance(mount, Mount):
-                    shutil.copytree(directory, root / mount.path.strip("/"), dirs_exist_ok=True)
-                    report.assets.append(mount.path)
+                scripts = await _export_route(app, route, root, base, relative, report) or scripts
+            if report.pages:
+                await _export_site_files(app, root, base, not_found, report)
+            if scripts:
+                _export_scripts(app, root, report)
+            _copy_static(app, root, report)
     finally:
         app.debug = was_debug
         app.client_nav = was_nav
     return report
+
+
+async def _export_route(
+    app: App, route: PageRoute, root: Path, base: str, relative: bool, report: ExportReport
+) -> bool:
+    """Write every page of one route; True if one of them loads the browser runtime."""
+    name = route.page.__name__
+    if (route.auth or "") == "required":
+        report.skipped.append((route.path, f"{name} requires sign-in"))
+        return False
+    urls = route.urls()
+    if not urls:
+        report.skipped.append((route.path, f"{name} has path parameters: list their values with paths="))
+    scripts = False
+    for url in urls:
+        file = _page_file(url)
+        status, body = await _get(app, url, _relative_base(file) if relative else base)
+        if status != 200:
+            report.skipped.append((url, f"{name} answered HTTP {status}"))
+        elif _needs_server(body):
+            report.skipped.append((url, f"{name} has server events and needs a live server"))
+        else:
+            _write(root, file, body)
+            report.pages.append(url)
+            scripts = scripts or RUNTIME_PATH in body
+    return scripts
+
+
+async def _export_site_files(app: App, root: Path, base: str, not_found: bool, report: ExportReport) -> None:
+    """The files a site with pages needs besides them: sitemap.xml and the like, the theme, a 404 page."""
+    for path in app.exported_files:  # sitemap.xml, robots.txt, ...
+        status, body = await _get(app, path, base)
+        if status == 200:
+            _write(root, path.lstrip("/"), body)
+            report.assets.append(path)
+    if app.theme_href:
+        _write(root, "_rational/theme.css", app.theme_css.encode())
+        report.assets.append("/_rational/theme.css")
+    own_404 = any(_page_file(url) == "404.html" for url in report.pages)  # the site's own 404 page wins
+    if not_found and not own_404:
+        status, body = await _get(app, "/__rational_not_found__", base)
+        if status == 404 and b"<html" in body:
+            _write(root, "404.html", body)
+
+
+def _export_scripts(app: App, root: Path, report: ExportReport) -> None:
+    """Pages with client components: the browser runtime and every compiled module."""
+    files = {"/_rational/runtime.js": app.runtime_js, "/_rational/islands.js": app.islands_js}
+    files.update({module.path: module.js for module in app.client_modules})
+    for path, text in files.items():
+        _write(root, path.lstrip("/"), text.encode())
+        report.assets.append(path)
+
+
+def _copy_static(app: App, root: Path, report: ExportReport) -> None:
+    """The folders served with ``app.static``."""
+    for mount in app.fastapi.routes:
+        directory = _static_directory(mount)
+        if directory is not None and isinstance(mount, Mount):
+            shutil.copytree(directory, root / mount.path.strip("/"), dirs_exist_ok=True)
+            report.assets.append(mount.path)
 
 
 def _needs_server(body: bytes) -> bool:

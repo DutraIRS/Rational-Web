@@ -5,7 +5,7 @@ too unless thread offload is on, in which case it runs in a worker thread so blo
 not stall every other request. Either way the session and page locks stay held for the whole
 call, so state is still changed by one handler at a time.
 
-Set the defaults on the app (``App(handler_timeout=..., sync_handlers="thread")``) and override
+Set the defaults on the app (``App(limits=Limits(handler_timeout=...), sync_handlers="thread")``) and override
 them per handler with :func:`timeout` and :func:`threaded`.
 """
 

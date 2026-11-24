@@ -57,8 +57,9 @@ jobs:
     permissions:
       id-token: write   # PyPI trusted publishing: no API token stored in the repository
     steps:
-      - uses: actions/download-artifact@v5
+      # This job can publish to PyPI: its actions are pinned to commits, which nobody can move (Dependabot updates them).
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

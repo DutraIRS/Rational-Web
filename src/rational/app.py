@@ -9,6 +9,7 @@ import logging
 import os
 import secrets
 import traceback
+import weakref
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from importlib import resources
@@ -40,14 +41,16 @@ from .http import (
     content_security_policy,
 )
 from .i18n import I18n
+from .limits import Limits
 from .logging import Logging, TelemetryMiddleware
 from .pages import PageRoute, PathValues, error_page
+from .pagestore import PageStore
 from .protocol import CSRF_PATH, EVENT_PATH, STREAM_PATH, WS_PATH, handle_event, handle_stream, handle_websocket
 from .resume import PageResumer
 from .router import Router
 from .runtime import PageRuntime
 from .security import Box, Signer
-from .session import Session, SessionBackend, SessionStore, TTLStore
+from .session import Session, SessionBackend, SessionStore, hashed_id
 from .sockets import Rooms
 from .styling.compiler import StyleCompiler
 from .styling.responsive import Breakpoint
@@ -68,7 +71,7 @@ T = TypeVar("T", bound=type)
 S = TypeVar("S", bound=type)
 
 _IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
-SESSION_CHANNEL = "rational:sessions"  # bus channel: "<boot id> <session id>" after each session write
+SESSION_CHANNEL = "rational:sessions"  # bus channel: "<worker> <hashed session id>" after each session write
 SWEEP_SECONDS = 60  # how often expired pages and sessions are let go of
 SHUTDOWN_TASK_SECONDS = 5  # how long background work (an email on its way, say) may finish at shutdown
 
@@ -105,13 +108,7 @@ class App:
         csp: bool = False,
         session_store: SessionBackend | None = None,
         session_ttl: float = 24 * 60 * 60,
-        page_ttl: float = 30 * 60,
-        max_pages: int = 5_000,
-        event_burst: int = 40,
-        event_rate: float = 20.0,
-        max_event_bytes: int = 64 * 1024,
-        max_request_bytes: int = 10 * 1024 * 1024,
-        handler_timeout: float | None = None,
+        limits: Limits | None = None,
         sync_handlers: SyncHandlers = "loop",
         client_nav: bool = False,
         view_transitions: bool = False,
@@ -130,8 +127,6 @@ class App:
         stylesheets: Sequence[str | Asset] = (),
         scripts: Sequence[str | Asset] = (),
     ) -> None:
-        if handler_timeout is not None and handler_timeout <= 0:
-            raise ValueError("handler_timeout must be a positive number of seconds or None")
         if sync_handlers not in ("loop", "thread"):
             raise ValueError("sync_handlers must be 'loop' or 'thread'")
         if "*" in cors_origins and len(cors_origins) > 1:
@@ -148,7 +143,7 @@ class App:
         self.stylesheets = (*(adapter.stylesheets if adapter else ()), *map(as_asset, stylesheets))
         self.scripts = (*(adapter.scripts if adapter else ()), *map(as_asset, scripts))
         self.cors_origins = tuple(cors_origins)
-        self.handler_timeout = handler_timeout
+        self.limits = Limits() if limits is None else limits
         self.sync_handlers = sync_handlers
         self.client_nav = client_nav
         self.view_transitions = view_transitions
@@ -168,20 +163,19 @@ class App:
         self.secure_cookies = secure_cookies
         self.csp = csp
         self.session_ttl = session_ttl
-        self.event_burst = event_burst
-        self.event_rate = event_rate
-        self.max_event_bytes = max_event_bytes
         self.logging = Logging()
 
         self.compiler = StyleCompiler(self.theme or get_theme("modern"), breakpoints, containers)
         self.sessions: SessionBackend = SessionStore(ttl=session_ttl) if session_store is None else session_store
         self.bus = bus
         self._following = False
+        # The sessions this worker follows on the bus, by hashed id: messages never carry a usable session id.
+        self._followed: weakref.WeakValueDictionary[str, Session] = weakref.WeakValueDictionary()
         self._tasks: set[asyncio.Task[Any]] = set()
         self.rooms = Rooms(self)  # WebSocket rooms (Socket.join / publish)
         if bus is not None and hasattr(self.sessions, "on_saved"):
             self.sessions.on_saved = self._announce_session
-        self.pages: TTLStore[PageRuntime] = TTLStore(page_ttl, max_pages, on_evict=PageRuntime.dispose_when_free)
+        self.pages = PageStore(self.limits)
         self.routes: dict[str, PageRoute] = {}  # by route path
         self.seo: Seo | None = None  # set by rational.seo.Seo
         self.captcha: Captcha | None = None  # set by rational.bots.Captcha
@@ -230,7 +224,7 @@ class App:
             redoc_url=None,
             openapi_url=f"{self.api_prefix}/openapi.json" if api_docs else None,
         )
-        self.fastapi.add_middleware(BodyLimitMiddleware, limit=max_request_bytes)
+        self.fastapi.add_middleware(BodyLimitMiddleware, limit=self.limits.max_request_bytes)
         self.fastapi.add_middleware(TelemetryMiddleware, telemetry=self.logging)
         self.fastapi.add_middleware(SecurityHeadersMiddleware)
         if self.cors_origins:
@@ -469,6 +463,8 @@ class App:
             await self.sessions.rotate(session)
             session.rotated = False
             ctx.session_created = True
+            if session.listeners:
+                self._followed[hashed_id(session.id)] = session  # announcements now name the new id
         return ctx.session_created
 
     @property
@@ -685,20 +681,25 @@ class App:
 
     async def _announce_session(self, session: Session) -> None:
         """``PersistentSessionStore.on_saved``: tell the other workers that ``session`` changed."""
-        assert self.bus is not None
+        if self.bus is None:
+            return
         try:
-            await self.bus.publish(SESSION_CHANNEL, f"{self._bus_origin} {session.id}")
+            await self.bus.publish(SESSION_CHANNEL, f"{self._bus_origin} {hashed_id(session.id)}")
         except Exception:
             log.exception("could not announce a session change")
 
-    def follow_sessions(self) -> None:
-        """Hear about session changes made by other workers (a page here shows session data)."""
-        if self.bus is not None and not self._following:
+    def follow_sessions(self, session: Session) -> None:
+        """Hear about changes other workers make to ``session`` (a page or socket here shows its data)."""
+        if self.bus is None:
+            return
+        self._followed[hashed_id(session.id)] = session
+        if not self._following:
             self._following = True
             self._spawn(self._subscribe_sessions())
 
     async def _subscribe_sessions(self) -> None:
-        assert self.bus is not None
+        if self.bus is None:
+            return
         try:
             await self.bus.subscribe(SESSION_CHANNEL, self._on_session_changed)
         except Exception:
@@ -706,10 +707,12 @@ class App:
             log.exception("could not follow session changes")
 
     def _on_session_changed(self, message: str) -> None:
-        origin, _, sid = message.partition(" ")
-        session = self.sessions.get(sid) if origin != self._bus_origin else None
-        if session is not None and session.listeners:
-            self._spawn(self.sessions.load(sid))  # merges the newer record and wakes the pages
+        origin, _, digest = message.partition(" ")
+        session = self._followed.get(digest) if origin != self._bus_origin else None
+        if session is None or hashed_id(session.id) != digest:  # unknown here, or rotated since
+            return
+        if session.listeners and self.sessions.get(session.id) is session:
+            self._spawn(self.sessions.load(session.id))  # merges the newer record and wakes the pages
 
     def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run ``coro`` in the background, keeping a reference and logging a failure."""
@@ -728,16 +731,7 @@ class App:
 
     @asynccontextmanager
     async def _lifespan(self, _app: FastAPI) -> AsyncIterator[None]:
-        try:
-            for fn in self._startup:
-                result = fn()
-                if inspect.isawaitable(result):
-                    await result
-        except Exception as exc:
-            if not self.debug:
-                raise
-            traceback.print_exception(type(exc), exc, exc.__traceback__)
-            self._startup_error = exc
+        await self._start()
         loop = asyncio.get_running_loop()
         self.stopping = False
         # Open push streams never finish by themselves: end them as soon as the server is told to stop,
@@ -751,20 +745,37 @@ class App:
             await cancel_and_wait([sweeper])
             self.pages.clear()  # unmount() runs, open streams end
             await self._finish_tasks()
-            for fn in reversed(self._shutdown):
-                try:
-                    result = fn()
-                    if inspect.isawaitable(result):
-                        await result
-                except Exception:
-                    log.exception("error in shutdown hook %r", fn)
-            if self.bus is not None and hasattr(self.bus, "close"):
-                try:
-                    await self.bus.close()
-                except Exception:
-                    log.exception("could not close the bus")
-            if self.db is not None:
-                await self.db.dispose()
+            await self._stop()
+
+    async def _start(self) -> None:
+        """Run the startup hooks. In debug mode a failure is shown on every page instead of stopping the server."""
+        try:
+            for fn in self._startup:
+                result = fn()
+                if inspect.isawaitable(result):
+                    await result
+        except Exception as exc:
+            if not self.debug:
+                raise
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+            self._startup_error = exc
+
+    async def _stop(self) -> None:
+        """Run the shutdown hooks (newest first), then close the bus and the database; a failure stops none."""
+        for fn in reversed(self._shutdown):
+            try:
+                result = fn()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                log.exception("error in shutdown hook %r", fn)
+        if self.bus is not None and hasattr(self.bus, "close"):
+            try:
+                await self.bus.close()
+            except Exception:
+                log.exception("could not close the bus")
+        if self.db is not None:
+            await self.db.dispose()
 
     def end_streams(self) -> None:
         """End every open push stream and refuse new ones: the server is stopping. Browsers reconnect by

@@ -32,7 +32,7 @@ from fastapi.responses import HTMLResponse
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rational import App, Button, Column, Component, Page, State, Style, Text, h  # noqa: E402
+from rational import App, Button, Column, Component, Limits, Page, State, Style, Text, h  # noqa: E402
 from rational.context import Context  # noqa: E402
 from rational.rendering.html import to_html  # noqa: E402
 from rational.runtime import PageRuntime  # noqa: E402
@@ -69,7 +69,9 @@ class Table(Component):
 
 
 def rational_app() -> App:
-    app = App(title="bench")
+    # One client asks for every page without cookies, and clicks as fast as it can: no limits.
+    unlimited = Limits(new_visitor_pages=None, max_new_pages=5_000, event_burst=10**9, event_rate=10**9)
+    app = App(title="bench", limits=unlimited)
 
     @app.page("/static")
     class Static(Page):
@@ -144,7 +146,6 @@ async def main(seconds: float) -> None:
         import json
 
         m = json.loads(manifest[0])
-        app.event_burst, app.event_rate = 10**9, 10**9
 
         async def click() -> None:
             nonlocal m
@@ -193,6 +194,7 @@ async def main(seconds: float) -> None:
     print("\n| Bytes on the wire | Raw | gzip |\n|---|---:|---:|")
     for label, data in [
         ("`runtime.js` (only on interactive pages)", runtime_js),
+        ("`islands.js` (only on pages with client components)", app.islands_js.encode()),
         ("Theme CSS (cached, immutable)", theme_css),
         ("Counter event response", event_response.content),
         ("100-row table page HTML (incl. inline CSS)", table_html.encode()),

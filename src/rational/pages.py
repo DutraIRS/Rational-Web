@@ -22,6 +22,7 @@ from .context import Context
 from .document import render_document
 from .errors import RationalError, Redirect
 from .http import base_path, request_target
+from .limits import NEW_VISITOR_TTL
 from .protocol import EVENT_PATH, PROTOCOL_VERSION, STREAM_PATH, WS_PATH
 from .rendering.html import escape_attr, escape_text, to_html
 from .rendering.nodes import with_base
@@ -105,46 +106,56 @@ class PageRoute:
 
     async def _serve(self, request: Request, ctx: Context) -> Response:
         app = self.app
-        base = base_path(request)
-
-        async def finish(response: Response) -> Response:
-            await app.finish(request, response, ctx)
-            return response
-
         try:
             page = self.build(request.path_params)
         except ValidationError:
-            return await finish(error_page(app, request, 404, "Page not found"))
-        try:
-            await app.limiter.check(self.page, ctx)
-        except RationalError as e:
-            return await finish(error_page(app, request, e.status, e.message, e.headers))
-        if self.auth == "required" and ctx.user is None:
-            if app.login_path:
-                login = f"{base}{app.login_path}?{urlencode({'next': request_target(request)}, safe='/')}"
-                return await finish(RedirectResponse(login, status_code=303))
-            return await finish(error_page(app, request, 401, "Please sign in to view this page"))
-
+            return await self._finish(request, ctx, error_page(app, request, 404, "Page not found"))
+        refusal = await self._refusal(request, ctx)
+        if refusal is not None:
+            return await self._finish(request, ctx, refusal)
         runtime = PageRuntime(page, ctx, StyleSheet(app.compiler))
-        runtime.base = base
+        runtime.base = base_path(request)
         runtime.origin = (self.path, {k: str(v) for k, v in request.path_params.items()})
         runtime.requires_user = self.auth == "required"
         try:
             try:
                 root = await self._render(runtime, request)
-            except Redirect as r:
-                url = base + r.url if r.url.startswith("/") and not r.url.startswith("//") else r.url
-                return await finish(RedirectResponse(url, status_code=r.status))
-            except RationalError as e:
-                return await finish(error_page(app, request, e.status, e.message, e.headers))
             except Exception as e:
-                if app.debug:
-                    return await finish(dev.error_page(request, e))
-                raise
+                return await self._finish(request, ctx, self._render_failure(request, e))
             return await self._respond(runtime, root, request, ctx)
         finally:
             if not runtime.served:
                 runtime.dispose()  # nothing can reach this page again: a static one, or a failed render
+
+    async def _finish(self, request: Request, ctx: Context, response: Response) -> Response:
+        await self.app.finish(request, response, ctx)
+        return response
+
+    async def _refusal(self, request: Request, ctx: Context) -> Response | None:
+        """What answers instead of the page: a rate limit, or a visitor who must sign in first."""
+        app = self.app
+        try:
+            await app.limiter.check(self.page, ctx)
+        except RationalError as e:
+            return error_page(app, request, e.status, e.message, e.headers)
+        if self.auth != "required" or ctx.user is not None:
+            return None
+        if app.login_path:
+            target = urlencode({"next": request_target(request)}, safe="/")
+            return RedirectResponse(f"{base_path(request)}{app.login_path}?{target}", status_code=303)
+        return error_page(app, request, 401, "Please sign in to view this page")
+
+    def _render_failure(self, request: Request, exc: Exception) -> Response:
+        """The answer to an exception raised while rendering; re-raises one the app does not expect."""
+        if isinstance(exc, Redirect):
+            base = base_path(request)
+            url = base + exc.url if exc.url.startswith("/") and not exc.url.startswith("//") else exc.url
+            return RedirectResponse(url, status_code=exc.status)
+        if isinstance(exc, RationalError):
+            return error_page(self.app, request, exc.status, exc.message, exc.headers)
+        if self.app.debug:
+            return dev.error_page(request, exc)
+        raise exc
 
     async def _render(self, runtime: PageRuntime, request: Request) -> Any:
         logs, page = self.app.logging, type(runtime.page).__name__
@@ -204,10 +215,16 @@ class PageRoute:
         manifest = self._manifest(runtime, ctx, base)
         if runtime.interactive:
             runtime.sync_session_revision()
-            app.pages.put(runtime.id, runtime)
+            new = runtime.session is not None and runtime.session.fresh  # a first-time visitor
+            if new and (spec := app.limits.new_visitor_limit) is not None:
+                try:
+                    await app.limiter.hit("rational.new_visitor_pages", spec, ctx)
+                except RationalError as e:  # no cookie either: the next try counts as a new visitor again
+                    return error_page(app, request, e.status, e.message, e.headers)
+            app.pages.put(runtime, new=new)
             runtime.served = True
             if app.resume is not None:
-                await app.resume.save(runtime)
+                await app.resume.save(runtime, ttl=NEW_VISITOR_TTL if new else None)
         personal = manifest is not None and bool(manifest.get("page") or manifest.get("csrf"))  # this visitor's
         status = page.status or 200
         headers = {"Cache-Control": "no-store" if personal else page.cache_control or "no-cache"}

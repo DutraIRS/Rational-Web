@@ -24,6 +24,7 @@ class FakeProvider:
     async def __call__(self, method, url, *, form=None, headers=None, **kwargs):
         if url.endswith("/.well-known/openid-configuration"):
             return {
+                "issuer": url.removesuffix("/.well-known/openid-configuration"),
                 "authorization_endpoint": "https://idp.example/authorize",
                 "token_endpoint": "https://idp.example/token",
                 "userinfo_endpoint": "https://idp.example/userinfo",
@@ -369,3 +370,20 @@ def test_apples_settings_and_a_name_that_is_not_a_name():
     assert provider.from_id_token(token, nonce="n", form_user='{"name": {"firstName": "Ada"}}').name == "Ada"
     with pytest.raises(ValueError, match="malformed"):
         provider.from_id_token("x." + base64.urlsafe_b64encode(b"[1]").decode().rstrip("=") + ".y", nonce="n")
+
+
+def test_a_discovery_document_must_name_the_configured_issuer(monkeypatch):
+    async def impostor(method, url, **kwargs):
+        return {
+            "issuer": "https://evil.example",
+            "authorization_endpoint": "https://evil.example/authorize",
+            "token_endpoint": "https://evil.example/token",
+            "userinfo_endpoint": "https://evil.example/userinfo",
+        }
+
+    monkeypatch.setattr(_http, "request", impostor)
+    app = App(secret_key="k" * 40)
+    oauth = OAuth(app, base_url="https://shop.example", on_login=lambda context, person: person.id)
+    oauth.add(oidc("idp", "https://idp.example", client_id="c", client_secret="s"))
+    reply = TestClient(app).http.get("/auth/idp/login", follow_redirects=False)
+    assert reply.status_code == 502 and "evil.example" not in reply.headers.get("location", "")

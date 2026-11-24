@@ -19,6 +19,7 @@ from rational import (
     Text,
     local_path,
 )
+from rational.bots import limit
 
 from models import SignInForm, SignUpForm, UserOut
 from services import AccountService
@@ -113,6 +114,7 @@ class Login(Page):
         # Query parameters belong to the page request, so read them in mount(), not in handlers.
         self.next_url = local_path(self.request.query_params.get("next"))  # never another site
 
+    @limit("10/minute")  # password guessing: ten tries a minute per IP address
     async def sign_in(self, form: SignInForm):
         user = await self.use(AccountService).authenticate(form.email, form.password)
         self.context.session.login(user.id)

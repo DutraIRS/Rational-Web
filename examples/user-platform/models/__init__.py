@@ -2,11 +2,12 @@
 
 from .database import Base, create_tables, database
 from .forms import PasswordForm, ProfileForm, SignInForm, SignUpForm
-from .user import ROLES, User, UserOut
+from .user import ROLES, FirstAccount, User, UserOut
 
 __all__ = [
     "ROLES",
     "Base",
+    "FirstAccount",
     "PasswordForm",
     "ProfileForm",
     "SignInForm",

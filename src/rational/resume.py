@@ -19,6 +19,7 @@ from fastapi import Request
 
 from .http import base_path
 from .runtime import PageRuntime
+from .session import hashed_id
 from .state import StateMismatch, class_name
 from .stores import json_plain
 from .styling.compiler import StyleSheet
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("rational")
 
-SNAPSHOT_VERSION = 2  # 2: each component's class is saved with its state
+SNAPSHOT_VERSION = 3  # 2: each component's class is saved with its state; 3: the session id is hashed
 
 
 def _usable(state: dict[str, Any]) -> dict[str, Any]:
@@ -76,15 +77,17 @@ class PageResumer:
             "v": SNAPSHOT_VERSION,
             "route": runtime.origin[0],
             "params": runtime.origin[1],
-            "sid": runtime.session.id,
+            "sid": hashed_id(runtime.session.id),
             "rev": runtime.revision,
             "seq": runtime.seq,
             "page_state": _usable(runtime.page_state),
             "components": components,
         }
 
-    async def save(self, runtime: PageRuntime, *, expect_revision: int | None = None) -> bool:
+    async def save(self, runtime: PageRuntime, *, expect_revision: int | None = None, ttl: int | None = None) -> bool:
         """Store the page's snapshot. Returns False only if another worker advanced the page first.
+
+        ``ttl`` shortens how long it is kept (a first-time visitor's page; its first event saves it again).
 
         With ``expect_revision`` the write is a compare-and-swap: it lands only if the stored snapshot
         still has that revision, so two workers holding the same page cannot both advance it. A failing
@@ -96,7 +99,7 @@ class PageResumer:
         key, raw = self._key(runtime.id), json.dumps(snap, separators=(",", ":")).encode()
         try:
             if expect_revision is None:
-                await self.driver.set(key, raw, self.ttl)
+                await self.driver.set(key, raw, self.ttl if ttl is None else min(ttl, self.ttl))
                 return True
             stored = await self.driver.get(key)
             revision = None if stored is None else _revision(stored)
@@ -134,7 +137,7 @@ class PageResumer:
         app = self.app
         route = next((r for r in app.routes.values() if r.path == snap.get("route")), None)
         session = await app.load_session(request)
-        if route is None or session is None or session.id != snap.get("sid"):
+        if route is None or session is None or hashed_id(session.id) != snap.get("sid"):
             return None
         ctx = await app.context_for(request, session)
         if route.auth == "required" and ctx.user is None:
@@ -163,6 +166,6 @@ class PageResumer:
         runtime.served = True
         runtime.sheet.drain()  # the browser already holds every rule the old runtime sent
         runtime.sync_session_revision()
-        app.pages.put(page_id, runtime)
+        app.pages.put(runtime)  # rebuilt for a browser that sent the session cookie
         app.logging.record("page.resumed", page_id=page_id)
         return runtime

@@ -75,17 +75,22 @@ class Limit:
     per: Literal["ip", "user", "session"]
 
 
+def parse_rate(rate: str, per: Literal["ip", "user", "session"] = "ip") -> Limit:
+    """``"5/minute"``, ``"100/hour"`` or ``"10/15 minutes"`` as a :class:`Limit`; ``ValueError`` otherwise."""
+    match = _RATE.match(rate)
+    if not match or int(match.group(1)) < 1:
+        raise ValueError(f'rate must look like "5/minute" or "100/10 minutes", not {rate!r}')
+    window = int(match.group(2) or 1) * _UNITS[match.group(3)]
+    return Limit(int(match.group(1)), window, per)
+
+
 def limit(rate: str, *, per: Literal["ip", "user", "session"] = "ip") -> Callable[[T], T]:
     """Allow ``rate`` calls (``"5/minute"``, ``"100/hour"``, ``"10/15 minutes"``) per client.
 
     ``per``: the client's IP address, the signed-in user (else the IP) or the browser session.
     Decorates event handlers, ``@remote`` methods and ``Page`` classes.
     """
-    match = _RATE.match(rate)
-    if not match or int(match.group(1)) < 1:
-        raise ValueError(f'rate must look like "5/minute" or "100/10 minutes", not {rate!r}')
-    window = int(match.group(2) or 1) * _UNITS[match.group(3)]
-    spec = Limit(int(match.group(1)), window, per)
+    spec = parse_rate(rate, per)
 
     def decorator(target: T) -> T:
         target.__rw_limit__ = spec  # type: ignore[attr-defined]
@@ -105,11 +110,13 @@ class Limiter:
     async def check(self, target: Any, context: Context) -> None:
         """Count one call to ``target`` if it has a ``@limit``; raise ``TooManyRequests`` past it."""
         spec: Limit | None = getattr(target, "__rw_limit__", None)
-        if spec is None:
-            return
+        if spec is not None:
+            await self.hit(getattr(target, "__qualname__", type(target).__name__), spec, context)
+
+    async def hit(self, name: str, spec: Limit, context: Context) -> None:
+        """Count one call of ``name`` by this client; raise ``TooManyRequests`` past ``spec``."""
         now = time.time()
         slot = int(now // spec.window)
-        name = getattr(target, "__qualname__", type(target).__name__)
         # Hashed: of a size any driver can store, and session ids stay out of the store's keys.
         who = hashlib.sha256(f"{name}:{_client(context, spec.per)}".encode()).hexdigest()
         key = f"rational:limit:{who}:{slot}"
@@ -176,14 +183,16 @@ class HumanCheck(Component):
 
 
 def _signer(app: App | None) -> Signer:
-    assert app is not None
+    if app is None:
+        raise RuntimeError("HumanCheck needs an App")
     return app.signer("rational.bots.form")
 
 
 async def check_submit(handler: Any, context: Context, form: dict[str, Any], page_id: str) -> None:
     """Remove the check fields from ``form``; for an ``@human`` handler, raise ``NotHuman`` unless they pass."""
     app = context.app
-    assert app is not None
+    if app is None:
+        raise RuntimeError("@human needs an App")
     trap, started = form.pop(HONEYPOT, None), form.pop(STARTED, None)
     token = form.pop(app.captcha.field, None) if app.captcha is not None else None
     if not getattr(handler, "__rw_human__", False):

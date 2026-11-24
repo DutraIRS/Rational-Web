@@ -57,6 +57,7 @@ from .errors import FieldError, Forbidden, NotFound, RemoteError, Unauthorized, 
 from .events import Event, js
 from .http import local_path
 from .i18n import I18n
+from .limits import Limits
 from .logging import Logging
 from .rendering import h, unsafe_html
 from .router import Router
@@ -103,6 +104,7 @@ __all__ = [
     "I18n",
     "Image",
     "Input",
+    "Limits",
     "Link",
     "Logging",
     "Main",

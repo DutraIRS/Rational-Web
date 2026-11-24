@@ -52,4 +52,5 @@ $ cd examples/blog
 $ python app.py --dev
 ```
 
-Sign in at http://127.0.0.1:8000/login with the password `rational` (set `BLOG_PASSWORD` to change it).
+Sign in at http://127.0.0.1:8000/login with the password `rational`, which only `--dev` accepts. With `--prod`
+the blog refuses to start until `BLOG_PASSWORD` holds the admin password.

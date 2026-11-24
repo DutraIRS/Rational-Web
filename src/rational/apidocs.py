@@ -33,7 +33,7 @@ def swagger_html(*, title: str, openapi_url: str, csrf: str | None) -> str:
     tryItOutEnabled: true,
     // Requests from this page carry your session cookie, so they also need its CSRF token.
     requestInterceptor: (request) => {{
-      if (config.csrf) request.headers["X-RW-CSRF"] = config.csrf;
+      request.headers["X-RW-CSRF"] = config.csrf;  // even empty: calls with cookies must carry it
       return request;
     }},
   }});

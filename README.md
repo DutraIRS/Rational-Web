@@ -71,7 +71,7 @@ there**:
   with theme tokens, pseudo-states, `@media` breakpoints and `@container` queries. You get no
   specificity wars, no class-name soup and no CSS injection.
 - **Secure by default.** Escaped output, session-bound events, CSRF tokens, session rotation,
-  rate and size limits, and an optional nonce-based CSP.
+  rate and size limits, and an optional strict CSP (same-origin scripts only, nonced styles).
 
 ## Features
 
@@ -161,6 +161,7 @@ an equivalent *pre-built* HTML string. Measured on Python 3.14.7, Windows 11, In
 | On the wire | gzip |
 |---|---:|
 | `runtime.js` (interactive pages only, cached) | 8.8 KiB |
+| `islands.js` (pages with client components only, cached) | 10.5 KiB |
 | Theme CSS (immutable, cached) | 1.6 KiB |
 | A click's response | 0.1 KiB |
 

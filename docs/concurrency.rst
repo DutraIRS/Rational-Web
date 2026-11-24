@@ -22,7 +22,7 @@ Time limits
 
 Give handlers a deadline so one stuck call cannot hold a session forever::
 
-    app = App(handler_timeout=10)
+    app = App(limits=Limits(handler_timeout=10))
 
     class Report(Component):
         @timeout(60)           # this handler may take longer

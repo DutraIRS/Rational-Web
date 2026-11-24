@@ -106,3 +106,10 @@ def test_post_lists_use_a_fixed_number_of_queries(social):
             page.submit({"body": f"Post number {i}"})
         assert len(client.http.get("/api/social/explore").json()) == 23
         assert queries_for_explore() == few
+
+
+def test_list_calls_share_one_cap(example):
+    example("social-network")
+    from services.social import MAX_LIST, _capped  # the example's own package, loaded just above
+
+    assert _capped(100_000) == MAX_LIST and _capped(-5) == 0

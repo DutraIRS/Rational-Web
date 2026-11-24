@@ -95,9 +95,11 @@ the REST API directly (``pip install`` nothing extra)::
 
     from rational.stripe import Stripe
 
-    stripe = Stripe(app, secret_key=STRIPE_SECRET_KEY, webhook_secret=STRIPE_WEBHOOK_SECRET)
+    stripe = Stripe(app, secret_key=STRIPE_SECRET_KEY, webhook_secret=STRIPE_WEBHOOK_SECRET,
+                    base_url="https://shop.example")
 
     ButtonLink("Upgrade", href=stripe.checkout_url(     # a signed link; Stripe is called on click
+        self.context,                                    # only this visitor's browser can use it
         line_items=[{"price": "price_123", "quantity": 1}],
         mode="payment",                                  # or "subscription"
         success_url="/done?session_id={CHECKOUT_SESSION_ID}",
@@ -110,12 +112,17 @@ the REST API directly (``pip install`` nothing extra)::
             ...
 
 ``stripe.checkout_url`` signs the parameters, so nothing is sent to Stripe while the page
-renders and the link cannot be altered. ``stripe.portal(customer_id, return_url=...)`` creates a
-customer portal session. ``Stripe(app, ..., base_url="https://shop.example")`` makes site paths
-(``/done``) absolute everywhere; without it, ``checkout_url`` uses the address of the request, and
-``checkout`` and ``portal`` need absolute URLs. Webhook handlers run only after the ``Stripe-Signature`` header is checked
-against the raw request body, with a five-minute replay window; without ``webhook_secret`` every
-webhook call is refused. Point Stripe at ``https://shop.example/stripe/webhook``. Stripe may send
+renders and the link cannot be altered. Given the page's context it works only in this visitor's
+session (required for a link that names a ``customer``), and it expires after an hour
+(``Stripe(link_ttl=...)``). Prefetches and requests from other pages' ``<img>`` tags are refused, so
+only a click creates a Checkout Session. To create one from a ``POST`` instead, call
+``await stripe.checkout(...)`` in an event handler and ``raise redirect(session["url"])``.
+``stripe.portal(customer_id, return_url=...)`` creates a customer portal session.
+``base_url`` makes site paths (``/done``) absolute everywhere; without it they must be absolute
+URLs, except in ``--dev`` (a request's ``Host`` header can be forged, and would choose where Stripe
+sends the customer back). Webhook handlers run only after the ``Stripe-Signature`` header is checked
+against the raw request body, and calls signed more than five minutes earlier are refused; a call
+replayed within those five minutes is not. Without ``webhook_secret`` every webhook call is refused. Point Stripe at ``https://shop.example/stripe/webhook``. Stripe may send
 an event more than once: make handlers idempotent (record ``event["id"]``).
 
 Password recovery, email verification and sign-in links

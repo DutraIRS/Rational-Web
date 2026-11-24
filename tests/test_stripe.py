@@ -6,9 +6,10 @@ import json
 import time
 
 import anyio
+import pytest
 from starlette.testclient import TestClient as StarletteClient
 
-from rational import App, Page, Text, _http
+from rational import App, ButtonLink, Page, Text, _http
 from rational.stripe import Stripe, StripeError, _stripe_form
 from rational.testing import TestClient
 
@@ -36,8 +37,8 @@ class FakeStripe:
         raise AssertionError(f"unexpected call {method} {url}")
 
 
-def stripe_app(fake, **kwargs):
-    app = App(secret_key="k" * 40)
+def stripe_app(fake, *, debug=False, **kwargs):
+    app = App(secret_key="k" * 40, debug=debug)
     events = []
     stripe = Stripe(app, secret_key="sk_test_x", webhook_secret="whsec_1", **kwargs)
 
@@ -63,7 +64,7 @@ def sign(payload: bytes, secret: str, timestamp: int | None = None) -> str:
 def test_checkout_url_creates_the_session_on_click(monkeypatch):
     fake = FakeStripe()
     monkeypatch.setattr(_http, "request", fake)
-    app, stripe, client, _ = stripe_app(fake)
+    app, stripe, client, _ = stripe_app(fake, base_url="https://shop.example")
     url = stripe.checkout_url(
         line_items=[{"price": "price_123", "quantity": 2}],
         mode="payment",
@@ -81,14 +82,14 @@ def test_checkout_url_creates_the_session_on_click(monkeypatch):
     assert sent["line_items[0][quantity]"] == "2"
     assert sent["mode"] == "payment"
     assert sent["customer_email"] == "ada@x.example"
-    assert sent["success_url"].endswith("/done") and sent["success_url"].startswith("http")
+    assert sent["success_url"] == "https://shop.example/done"
     assert sent["cancel_url"].endswith("/upgrade")
 
 
 def test_checkout_link_cannot_be_forged(monkeypatch):
     fake = FakeStripe()
     monkeypatch.setattr(_http, "request", fake)
-    app, stripe, client, _ = stripe_app(fake)
+    app, stripe, client, _ = stripe_app(fake, base_url="https://shop.example")
     assert client.http.get("/stripe/checkout?c=forged", follow_redirects=False).status_code == 404
     assert client.http.get("/stripe/checkout", follow_redirects=False).status_code == 404
     url = stripe.checkout_url(mode="payment", success_url="/done", cancel_url="/u")
@@ -205,10 +206,10 @@ def test_a_nan_timestamp_does_not_skip_the_freshness_check(monkeypatch):
     assert fresh.status_code == 200
 
 
-def test_site_paths_become_absolute_once_under_a_prefix(monkeypatch):
+def test_in_dev_site_paths_follow_the_request_once_under_a_prefix(monkeypatch):
     fake = FakeStripe()
     monkeypatch.setattr(_http, "request", fake)
-    app, stripe, _client, _events = stripe_app(fake)
+    app, stripe, _client, _events = stripe_app(fake, debug=True)
     link = stripe.checkout_url(line_items=[], mode="payment", success_url="/done", cancel_url="https://x.example/c")
     served = StarletteClient(app, base_url="https://site.example", root_path="/shop")
     assert served.get(link, follow_redirects=False).status_code == 303
@@ -281,3 +282,58 @@ def test_a_signature_with_non_ascii_characters_is_refused_not_a_crash():
     header = f"t={int(time.time())},v1=é".encode()
     reply = client.http.post("/stripe/webhook", content=payload, headers={"Stripe-Signature": header})
     assert reply.status_code == 400 and events == []
+
+
+def bound_link_app(fake):
+    """A page that binds its checkout link to the visitor's session (review 2026-11-24, #3)."""
+    app = App(secret_key="k" * 40)
+    stripe = Stripe(app, secret_key="sk_test_x", base_url="https://shop.example")
+
+    @app.page("/upgrade")
+    class Upgrade(Page):
+        def render(self):
+            return ButtonLink("Pay", href=stripe.checkout_url(self.context, customer="cus_1", mode="payment"))
+
+    return app, stripe
+
+
+def test_a_bound_link_works_only_in_the_visitors_session(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    app, _ = bound_link_app(fake)
+    visitor = TestClient(app)
+    page = visitor.open("/upgrade")
+    link = next(a.get("href") for a in page.dom.find_all("a") if a.text == "Pay")
+
+    stranger = TestClient(app).http.get(link, follow_redirects=False)
+    assert stranger.status_code == 403 and fake.checkouts == []
+
+    mine = visitor.http.get(link, follow_redirects=False)
+    assert mine.status_code == 303 and fake.checkouts[0]["customer"] == "cus_1"
+
+
+def test_links_are_checked_before_calling_stripe(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    app, stripe, client, _ = stripe_app(fake)
+    with pytest.raises(TypeError, match="customer"):
+        stripe.checkout_url(customer="cus_1", mode="payment")  # would work for anyone holding it
+    with pytest.raises(ValueError, match="base_url"):
+        stripe.checkout_url(mode="payment", success_url="/done")  # the Host header would decide
+
+    link = stripe.checkout_url(mode="payment", success_url="https://shop.example/done")
+    for headers in ({"sec-purpose": "prefetch"}, {"purpose": "prefetch"}, {"sec-fetch-dest": "image"}):
+        assert client.http.get(link, headers=headers, follow_redirects=False).status_code == 503
+    assert fake.checkouts == []
+    page = {"sec-fetch-dest": "document", "sec-fetch-user": "?1"}
+    assert client.http.get(link, headers=page, follow_redirects=False).status_code == 303
+
+
+def test_checkout_links_expire(monkeypatch):
+    fake = FakeStripe()
+    monkeypatch.setattr(_http, "request", fake)
+    _app, stripe, client, _ = stripe_app(fake, link_ttl=60)
+    link = stripe.checkout_url(mode="payment")
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 61)
+    assert client.http.get(link, follow_redirects=False).status_code == 404

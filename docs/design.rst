@@ -106,4 +106,4 @@ Known limitations
   replaces the element (with ``fine_patches=False`` they are reset).
 * Mounted sub-applications do not receive lifespan events, so ``on_startup`` hooks of a
   mounted ``App`` must be called by the host application, and its expired pages are only let go
-  of when the next ones push them out (``max_pages``).
+  of when the next ones push them out (``Limits(max_pages=...)``).

@@ -40,7 +40,7 @@ def counter_app():
 
 
 def only_page(app):
-    return next(entry[1] for entry in app.pages._items.values())
+    return app.pages.values()[0]
 
 
 def test_a_changed_token_is_fetched_and_the_event_sent_again(browser):

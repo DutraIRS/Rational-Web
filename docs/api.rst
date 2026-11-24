@@ -7,6 +7,11 @@ Application
 .. autoclass:: rational.App
    :members: page, socket, service, include, url_for, on_startup, on_shutdown, on_error, authenticate, signer, box, static, run
 
+.. autoclass:: rational.Limits
+
+.. automodule:: rational.limits
+   :no-members:
+
 .. autoclass:: rational.Router
    :members: page, service, on_startup, include
 

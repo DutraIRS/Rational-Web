@@ -16,11 +16,11 @@ Events
    cookie the page view is bound to **and** the session's CSRF token (header). Payloads
    are validated against handler annotations before the handler runs. Unknown handlers
    resynchronize the page instead of failing. Events are size-limited (64 KiB) and
-   rate-limited per page view. On a page with ``auth="required"``, a visitor who has signed out in
+   rate-limited per browser session, whatever the number of its page views. On a page with ``auth="required"``, a visitor who has signed out in
    the meantime is sent to sign in again instead of the handler running.
 
 Requests
-   Bodies over ``App(max_request_bytes=...)`` (10 MiB) are refused with 413, before they are read
+   Bodies over ``Limits(max_request_bytes=...)`` (10 MiB) are refused with 413, before they are read
    when the request announces its size and as soon as they pass the limit otherwise. Tampered
    cookies, tokens and headers count as invalid, whatever characters they contain.
 
@@ -29,11 +29,23 @@ Sessions
    over HTTPS). ``session.login()`` and ``session.logout()`` rotate the id and the CSRF
    token, even when the request then fails, and nothing is ever stored under the old id
    after a login. With a persistent store, a logout on one worker ends the session on all of
-   them. Page views expire after 30 idle minutes and are bounded in number.
+   them. Session ids are stored hashed, in a persistent store and in page snapshots, so a copy of
+   the store holds no usable tokens.
+
+Live page views
+   A page view lives in server memory, and anyone can ask for one, so the pools are arranged to keep
+   a flood of anonymous requests away from the visitors who use the site. A first-time visitor's
+   page views and session wait in a separate, smaller pool until the browser comes back with the
+   session cookie; one session holds at most 16 page views (its own oldest goes first); and one IP
+   address opens at most 60 page views a minute without a cookie. A persistent store keeps a
+   first-time visitor's record for an hour, not a day. Page views expire after 30 idle minutes.
+   These are defaults of :class:`~rational.Limits`. They raise the cost of a flood, they do not stop
+   one: in production, put a reverse proxy that limits request rates in front, and list it in
+   ``FORWARDED_ALLOW_IPS`` so that limits count the visitor's address, not the proxy's.
 
 Passwords and timing
    scrypt with parameters from the OWASP list, on a bounded pool of worker threads. Sign-in and
-   account emails take the same time whether or not the account exists, when you use
+   account emails take about the same time whether or not the account exists, when you use
    ``averify_password(password, None)`` and :class:`~rational.accounts.Accounts`.
 
 Live connections
@@ -50,14 +62,20 @@ Redirects
 
 Remote API
    Nothing is exposed unless decorated with ``@remote``. Inputs and outputs are
-   validated by Pydantic. ``auth="required"`` enforces authentication; authorization
+   validated by Pydantic. Calls other than ``GET`` must carry the session's CSRF token, and when the
+   app signs people in with its own cookie instead of the session, they must still carry the
+   ``X-RW-CSRF`` header (``rational.call`` always does), which another site cannot add. Their
+   bodies must be JSON. ``auth="required"`` enforces authentication; authorization
    (who may touch *which* row) belongs in your service methods — see ``TodoService._owned``
    in the ``todos`` example. Unexpected exceptions never leak details.
 
 Headers
    ``X-Content-Type-Options: nosniff``, ``Referrer-Policy``, ``X-Frame-Options`` and,
-   with ``App(csp=True)``, a nonce-based ``Content-Security-Policy``. Other origins your pages
-   need go in ``app.csp_sources``, by directive.
+   with ``App(csp=True)``, a ``Content-Security-Policy`` that allows no inline script at all:
+   scripts must come from the site itself (``script-src 'self'``) and styles carry a per-response
+   nonce. Any file the site serves can run as a script, so never serve uploads from an
+   ``app.static`` folder on the same origin. Other origins your pages need go in
+   ``app.csp_sources``, by directive.
 
 Development mode
    Shows source code and tracebacks. It binds to localhost by default and warns when it

@@ -192,3 +192,17 @@ def test_theme_validation_and_overrides():
     assert "brand" in brand.color_names
     css = StyleCompiler(brand).compile(Style(color="brand")).rules[0]
     assert "var(--rw-color-brand)" in css
+
+
+def test_values_outside_a_properties_known_keywords_are_still_checked():
+    """A value that is not a str skips the check at construction; compiling must still catch it (review Q4)."""
+    import enum
+
+    class Sneaky(enum.Enum):
+        X = "x"
+
+        def __str__(self):
+            return "center;}body{display:none"
+
+    with pytest.raises(StyleError):
+        StyleCompiler(MODERN).compile(Style(justify=Sneaky.X))
