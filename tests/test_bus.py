@@ -92,6 +92,7 @@ class FakePubSub:
 
     async def subscribe(self, channel):
         self.channels.add(channel)
+        await self.queue.put({"type": "subscribe", "channel": channel.encode(), "data": 1})  # as Redis confirms
 
     async def unsubscribe(self, channel):
         self.channels.discard(channel)
@@ -221,6 +222,7 @@ async def test_the_reader_reconnects_after_an_error_and_close_ends_it():
     client = FlakyClient()
     bus = RedisBus(client)
     bus.reconnect_delay = 0
+    bus.subscribe_timeout = 0.05  # the fake never confirms a subscription
     got = []
     await bus.subscribe("c", got.append)
     await eventually(lambda: got == ["one"])
@@ -240,6 +242,7 @@ async def test_a_failed_subscribe_leaves_nothing_behind():
     good = client.pubsub_instance.subscribe
     client.pubsub_instance.subscribe = refuse
     bus = RedisBus(client)
+    bus.subscribe_timeout = 0.05  # the fake never confirms a subscription
     with pytest.raises(ConnectionError):
         await bus.subscribe("c", print)
     assert bus._callbacks == {} and bus._reader is None
@@ -326,3 +329,45 @@ async def test_a_failed_join_lets_the_next_one_try_again():
     bus.fail = False
     await rooms.join("r", object())
     assert callable(rooms._unsubscribe["r"])
+
+
+class LaggingRedis:
+    """Takes a moment to act on SUBSCRIBE, which then reaches Redis after a PUBLISH sent on another connection."""
+
+    def __init__(self):
+        self.active, self.queue = set(), asyncio.Queue()
+
+    def pubsub(self):
+        return self
+
+    async def subscribe(self, *channels):
+        async def later():
+            await asyncio.sleep(0.05)
+            for channel in channels:
+                self.active.add(channel)
+                await self.queue.put({"type": "subscribe", "channel": channel.encode(), "data": 1})
+
+        asyncio.get_running_loop().create_task(later())
+
+    async def unsubscribe(self, *channels):
+        self.active.difference_update(channels)
+
+    async def publish(self, channel, message):
+        if channel in self.active:  # Redis drops a message nobody is subscribed to yet
+            await self.queue.put({"type": "message", "channel": channel.encode(), "data": message.encode()})
+
+    async def listen(self):
+        while True:
+            yield await self.queue.get()
+
+    async def aclose(self):
+        pass
+
+
+async def test_a_publish_right_after_subscribe_is_not_lost():
+    """CI saw this once against a real Redis: subscribe() returned before Redis had subscribed."""
+    bus, got = RedisBus(LaggingRedis()), []
+    await bus.subscribe("c", got.append)
+    await bus.publish("c", "first")
+    await eventually(lambda: got == ["first"])
+    await bus.close()
