@@ -51,7 +51,7 @@ redis = ["redis>=5"]
 crypto = ["cryptography>=42"]
 migrations = ["rational[db]", "alembic>=1.13"]
 websockets = ["websockets>=12"]
-testing = ["httpx>=0.27,<0.28", "httpx2>=2"]  # Starlette <1 uses httpx; >=1 prefers httpx2
+testing = ["httpx>=0.27,<0.29", "httpx2>=2"]  # Starlette <1 uses httpx; >=1 prefers httpx2
 dev = [
     "rational[db,testing,migrations,websockets,crypto]",
     "pytest>=8",
