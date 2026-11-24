@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `RedisBus.subscribe()` waits until Redis confirms the subscription (up to `subscribe_timeout`, five
+  seconds). It returned as soon as the command was sent, so a message published right after it, on another
+  connection, could reach Redis first and be dropped: a session change missed by another worker, say.
+- `RedisBus` no longer loses a subscription made while its reader was ending after the last unsubscribe.
+
 ## [0.5.1a1] - 2026-11-24
 
 The fixes from the code review of 24 November 2026.

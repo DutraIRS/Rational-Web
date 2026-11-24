@@ -59,6 +59,7 @@ class RedisBus:
     """Redis pub/sub (``pip install "rational[redis]"``). Pass a ``redis.asyncio`` client or a URL."""
 
     reconnect_delay = 1.0  # seconds to wait after losing the connection, before trying again
+    subscribe_timeout = 5.0  # seconds subscribe() waits for Redis to confirm, so a publish right after it arrives
 
     def __init__(self, client: Any = None, *, url: str | None = None) -> None:
         self._owns_client = client is None
@@ -75,6 +76,7 @@ class RedisBus:
         self._pubsub: Any = None
         self._callbacks: dict[str, list[Callback]] = {}
         self._reader: asyncio.Task[None] | None = None
+        self._pending: dict[str, asyncio.Event] = {}  # channels whose SUBSCRIBE Redis has not confirmed yet
 
     async def publish(self, channel: str, message: str) -> None:
         await self.client.publish(channel, message)
@@ -85,13 +87,24 @@ class RedisBus:
         first = channel not in self._callbacks
         self._callbacks.setdefault(channel, []).append(callback)
         if first:
+            confirmed = self._pending[channel] = asyncio.Event()
             try:
                 await self._pubsub.subscribe(channel)
             except Exception:
                 self._callbacks.pop(channel, None)
+                self._pending.pop(channel, None)
                 raise
         if self._reader is None or self._reader.done():
             self._reader = asyncio.get_running_loop().create_task(self._read())
+        if first:
+            # PUBLISH travels on another connection: until Redis has confirmed the SUBSCRIBE, it may handle a
+            # publish first and drop the message.
+            try:
+                await asyncio.wait_for(confirmed.wait(), self.subscribe_timeout)
+            except TimeoutError:
+                log.warning("Redis has not confirmed the subscription to %s yet", channel)
+            finally:
+                self._pending.pop(channel, None)
 
         async def unsubscribe() -> None:
             callbacks = self._callbacks.get(channel, [])
@@ -109,7 +122,9 @@ class RedisBus:
             try:
                 async for item in self._pubsub.listen():
                     self._dispatch(item)
-                return  # the last channel was unsubscribed; the next subscribe starts a new reader
+                if not self._callbacks:
+                    return  # the last channel was unsubscribed; the next subscribe starts a new reader
+                # A subscribe arrived while this loop was ending, and saw this reader still running: go on.
             except Exception:
                 if not self._callbacks:
                     return
@@ -119,10 +134,13 @@ class RedisBus:
                     await self._pubsub.subscribe(*self._callbacks)
 
     def _dispatch(self, item: dict[str, Any]) -> None:
-        if item.get("type") != "message":
+        kind, raw = item.get("type"), item.get("channel")
+        channel = raw.decode() if isinstance(raw, bytes) else str(raw)
+        if kind == "subscribe" and channel in self._pending:
+            self._pending[channel].set()
+        if kind != "message":
             return
-        channel, data = item["channel"], item["data"]
-        channel = channel.decode() if isinstance(channel, bytes) else channel
+        data = item["data"]
         text = data.decode() if isinstance(data, bytes) else str(data)
         for callback in list(self._callbacks.get(channel, ())):
             try:
